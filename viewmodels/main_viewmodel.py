@@ -177,9 +177,12 @@ class MainViewModel:
                     self.log_queue.put("No trained model found. Please train first.", 'error')
                     return
                 
-                prob = self.model_manager.predict(combined)
+                result = self.model_manager.predict(combined)
                 
-                if prob is not None:
+                if result is not None:
+                    prob = result['probability']
+                    feature_details = result['feature_details']
+                    
                     latest_date = combined.index[-1]
                     latest_date_str = latest_date.strftime('%Y-%m-%d')
                     latest_return = combined['daily_return'].iloc[-1] * 100
@@ -215,6 +218,22 @@ class MainViewModel:
                     
                     self.log_queue.put(f"Signal: {signal}", 'info')
                     self.log_queue.put('='*50, 'info')
+                    
+                    # Log top feature inputs
+                    self.log_queue.put(f"\nTop 15 features by importance:", 'info')
+                    self.log_queue.put(f"{'Feature':<30} {'Value':>12} {'Importance':>10}", 'info')
+                    self.log_queue.put(f"{'-'*30} {'-'*12} {'-'*10}", 'info')
+                    for fd in feature_details[:15]:
+                        val = fd['value']
+                        imp = fd['importance']
+                        # Format value: percentages for returns, otherwise raw
+                        if 'return' in fd['name'] or fd['name'] == 'macd_histogram':
+                            val_str = f"{val:>+12.4f}"
+                        else:
+                            val_str = f"{val:>12.4f}"
+                        self.log_queue.put(
+                            f"{fd['name']:<30} {val_str} {imp:>10.4f}", 'info'
+                        )
                 else:
                     self.log_queue.put("Prediction failed.", 'error')
                     

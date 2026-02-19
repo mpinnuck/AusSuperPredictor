@@ -121,6 +121,11 @@ class ModelManager:
         rs = gain / loss
         df['rsi'] = 100 - (100 / (1 + rs))
         
+        # When predicting, forward-fill computed features so the live row
+        # inherits the latest market returns instead of NaN
+        if for_prediction:
+            df = df.ffill()
+        
         # Drop NaN rows from feature engineering
         initial_rows = len(df)
         df.dropna(inplace=True)
@@ -291,10 +296,10 @@ class ModelManager:
             self._log(f"✗ Failed to save versioned model: {e}", 'error')
             return ""
     
-    def predict(self, df: pd.DataFrame) -> Optional[float]:
+    def predict(self, df: pd.DataFrame) -> Optional[Dict[str, Any]]:
         """
-        Predict probability for the latest row
-        Returns probability of positive return
+        Predict probability for the latest row.
+        Returns dict with probability, feature values, and importances.
         """
         if self.model is None or self.feature_columns is None:
             if not self.load_model():
@@ -312,11 +317,31 @@ class ModelManager:
             
             # Check for NaN values
             if latest.isna().any().any():
-                self._log("⚠ Latest data contains NaN values", 'warning')
+                nan_cols = latest.columns[latest.isna().any()].tolist()
+                self._log(f"⚠ Latest data contains NaN values in: {nan_cols}", 'warning')
                 return None
             
             prob = self.model.predict_proba(latest)[0][1]
-            return prob
+            
+            # Build feature importance / value breakdown
+            importances = pd.Series(
+                self.model.feature_importances_, index=self.feature_columns
+            ).sort_values(ascending=False)
+            
+            feature_values = latest.iloc[0]
+            
+            feature_details = []
+            for feat in importances.index:
+                feature_details.append({
+                    'name': feat,
+                    'value': feature_values[feat],
+                    'importance': importances[feat],
+                })
+            
+            return {
+                'probability': prob,
+                'feature_details': feature_details,
+            }
             
         except Exception as e:
             self._log(f"✗ Prediction failed: {e}", 'error')

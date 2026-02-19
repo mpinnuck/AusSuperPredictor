@@ -184,7 +184,12 @@ class DataManager:
             else:
                 start = last_date + timedelta(days=1)
                 if start <= end_date:
-                    new_data = self.fetch_australiansuper_data(start, end_date)
+                    # Fetch from last_date (not start) so pct_change has a reference price
+                    # for calculating returns on the first new day
+                    new_data = self.fetch_australiansuper_data(last_date, end_date)
+                    if not new_data.empty:
+                        # Trim to only new data (after last_date)
+                        new_data = new_data[new_data.index > pd.Timestamp(last_date)]
                     if not new_data.empty:
                         # Ensure directory exists before saving
                         self._ensure_data_directory()
@@ -491,8 +496,26 @@ class DataManager:
             return fund_data
         
         combined = fund_data.join(market_data, how='left')
-        combined = combined.ffill()
-        combined.dropna(inplace=True)
+        
+        if live_row is not None and len(combined) > 1:
+            # Identify market columns that are NaN in the live row (no market data yet)
+            market_cols = [c for c in market_data.columns if c in combined.columns]
+            live_market_nans = combined.iloc[-1][market_cols].isna()
+            
+            # Forward-fill everything (needed for historical rows)
+            combined = combined.ffill()
+            
+            # Restore NaN for the live row's market columns that had no data.
+            # This ensures pct_change in engineer_features computes NaN (not 0)
+            # for the live row. engineer_features will then ffill the computed
+            # features so the live row inherits the previous day's market returns.
+            for col in market_cols:
+                if live_market_nans.get(col, False):
+                    combined.iloc[-1, combined.columns.get_loc(col)] = np.nan
+        else:
+            combined = combined.ffill()
+        
+        combined.dropna(subset=['daily_return', 'price'], inplace=True)
         return combined
     
     def _log(self, message: str, level: str = 'info'):
