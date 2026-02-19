@@ -17,7 +17,7 @@ class MainViewModel:
         self.config = config
         self.log_queue = QueueHandler()
         self.data_manager = DataManager(config, self.log_queue)
-        self.model_manager = ModelManager(config)
+        self.model_manager = ModelManager(config, self.log_queue)
         self.time_utils = SydneyTimeUtils()
         
         # State variables (observed by View)
@@ -160,14 +160,14 @@ class MainViewModel:
         
         def worker():
             try:
-                self.log_queue.put("Loading combined data...", 'info')
-                combined = self.data_manager.prepare_combined_data()
+                self.log_queue.put("Loading combined data with live ASX200...", 'info')
+                combined = self.data_manager.prepare_combined_data_for_prediction()
                 
                 if combined.empty:
                     self.log_queue.put("No data available. Please update data first.", 'error')
                     return
                 
-                combined = self.model_manager.engineer_features(combined)
+                combined = self.model_manager.engineer_features(combined, for_prediction=True)
                 
                 if combined.empty:
                     self.log_queue.put("No valid features could be created from the data.", 'error')
@@ -180,15 +180,25 @@ class MainViewModel:
                 prob = self.model_manager.predict(combined)
                 
                 if prob is not None:
-                    latest_date = combined.index[-1].strftime('%Y-%m-%d')
+                    latest_date = combined.index[-1]
+                    latest_date_str = latest_date.strftime('%Y-%m-%d')
                     latest_return = combined['daily_return'].iloc[-1] * 100
+                    latest_price = combined['price'].iloc[-1]
+                    
+                    # Calculate next trading day (skip weekends)
+                    from datetime import timedelta
+                    next_day = latest_date + timedelta(days=1)
+                    while next_day.weekday() >= 5:  # 5=Sat, 6=Sun
+                        next_day += timedelta(days=1)
+                    prediction_date_str = next_day.strftime('%Y-%m-%d')
                     
                     self.log_queue.put(f"\n{'='*50}", 'info')
-                    self.log_queue.put(f"Prediction based on data up to {latest_date}", 'info')
-                    self.log_queue.put(f"Latest daily return: {latest_return:.2f}%", 'info')
-                    self.log_queue.put(f"Probability of POSITIVE return tomorrow: {prob*100:.1f}%", 
+                    self.log_queue.put(f"ASX200 latest price: {latest_price:,.2f} ({latest_date_str})", 'info')
+                    self.log_queue.put(f"Latest daily return: {latest_return:+.2f}%", 'info')
+                    self.log_queue.put(f"Prediction for: {prediction_date_str}", 'info')
+                    self.log_queue.put(f"Probability of POSITIVE return: {prob*100:.1f}%", 
                                       'success' if prob>0.5 else 'info')
-                    self.log_queue.put(f"Probability of NEGATIVE return tomorrow: {(1-prob)*100:.1f}%", 
+                    self.log_queue.put(f"Probability of NEGATIVE return: {(1-prob)*100:.1f}%", 
                                       'error' if prob<0.5 else 'info')
                     
                     # Signal

@@ -2,9 +2,11 @@
 Main Window View - single responsibility for UI layout and user interaction
 Binds to ViewModel for all business logic
 """
+import os
 import tkinter as tk
 from tkinter import ttk
 from views.log_panel import LogPanel
+from views.file_viewer import FileViewer  # New import
 from viewmodels.main_viewmodel import MainViewModel
 
 class MainWindow:
@@ -41,7 +43,7 @@ class MainWindow:
         
         # Settings title
         ttk.Label(top_frame, text="Settings", font=('Arial', 14, 'bold')).grid(
-            row=0, column=0, columnspan=3, sticky='w', pady=(0,10))
+            row=0, column=0, columnspan=4, sticky='w', pady=(0,10))
         
         # Countdown display (bound to ViewModel)
         self.countdown_label = ttk.Label(
@@ -50,17 +52,26 @@ class MainWindow:
             font=('Arial', 12, 'bold'), 
             foreground='blue'
         )
-        self.countdown_label.grid(row=1, column=0, columnspan=3, sticky='w', pady=5)
+        self.countdown_label.grid(row=1, column=0, columnspan=4, sticky='w', pady=5)
         
         # Data info
         ttk.Label(top_frame, text="Local data file:").grid(
             row=2, column=0, sticky='e', padx=5, pady=5)
         self.data_file_label = ttk.Label(
             top_frame, 
-            text=self.viewmodel.config['data']['local_csv_path'], 
+            text=os.path.basename(self.viewmodel.config['data']['local_csv_path']), 
             foreground='blue'
         )
         self.data_file_label.grid(row=2, column=1, sticky='w', padx=5, pady=5)
+        
+        # View Data button (NEW)
+        self.view_data_btn = ttk.Button(
+            top_frame,
+            text="👁 View",
+            command=self._on_view_data_clicked,
+            width=8
+        )
+        self.view_data_btn.grid(row=2, column=2, padx=5, pady=5)
         
         # Last update
         ttk.Label(top_frame, text="Last data date:").grid(
@@ -72,6 +83,25 @@ class MainWindow:
         )
         self.last_date_label.grid(row=3, column=1, sticky='w', padx=5, pady=5)
         
+        # Model info
+        ttk.Label(top_frame, text="Model file:").grid(
+            row=4, column=0, sticky='e', padx=5, pady=5)
+        self.model_file_label = ttk.Label(
+            top_frame, 
+            text=os.path.basename(self.viewmodel.config['model']['save_path']), 
+            foreground='blue'
+        )
+        self.model_file_label.grid(row=4, column=1, sticky='w', padx=5, pady=5)
+        
+        # View Model button (NEW)
+        self.view_model_btn = ttk.Button(
+            top_frame,
+            text="👁 View",
+            command=self._on_view_model_clicked,
+            width=8
+        )
+        self.view_model_btn.grid(row=4, column=2, padx=5, pady=5)
+        
         # Auto-run checkbox
         self.auto_var = tk.BooleanVar(value=self.viewmodel.auto_run_enabled)
         ttk.Checkbutton(
@@ -79,11 +109,11 @@ class MainWindow:
             text="Enable auto-run at 15:30 Sydney time",
             variable=self.auto_var,
             command=self._on_auto_run_toggle
-        ).grid(row=4, column=0, columnspan=2, sticky='w', pady=5)
+        ).grid(row=5, column=0, columnspan=3, sticky='w', pady=5)
         
         # Buttons
         button_frame = ttk.Frame(top_frame)
-        button_frame.grid(row=5, column=0, columnspan=3, pady=10)
+        button_frame.grid(row=6, column=0, columnspan=4, pady=10)
         
         self.update_btn = ttk.Button(
             button_frame, 
@@ -164,12 +194,34 @@ class MainWindow:
         """Handle Run Prediction button click"""
         self.viewmodel.predict_async()
     
+    def _on_view_data_clicked(self):
+        """Handle View Data button click"""
+        file_path = self.viewmodel.config['data']['local_csv_path']
+        if os.path.exists(file_path):
+            FileViewer(self.root, file_path, "AustralianSuper Data")
+        else:
+            self.log_panel.log(f"⚠ Data file not found: {file_path}", 'warning')
+    
+    def _on_view_model_clicked(self):
+        """Handle View Model button click"""
+        file_path = self.viewmodel.config['model']['save_path']
+        if os.path.exists(file_path):
+            FileViewer(self.root, file_path, "Model Information")
+        else:
+            self.log_panel.log(f"⚠ Model file not found: {file_path}", 'warning')
+    
     def update_ui(self):
         """Update UI based on ViewModel state (called when state changes)"""
         # Update button states
         self.update_btn.config(state=tk.DISABLED if self.viewmodel.is_updating else tk.NORMAL)
         self.train_btn.config(state=tk.DISABLED if self.viewmodel.is_training else tk.NORMAL)
         self.predict_btn.config(state=tk.DISABLED if self.viewmodel.is_predicting else tk.NORMAL)
+        
+        # View buttons are always enabled if files exist
+        data_exists = os.path.exists(self.viewmodel.config['data']['local_csv_path'])
+        model_exists = os.path.exists(self.viewmodel.config['model']['save_path'])
+        self.view_data_btn.config(state=tk.NORMAL if data_exists else tk.DISABLED)
+        self.view_model_btn.config(state=tk.NORMAL if model_exists else tk.DISABLED)
         
         # Update last date label
         self.last_date_label.config(text=self.viewmodel.last_data_date)

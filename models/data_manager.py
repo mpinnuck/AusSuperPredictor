@@ -52,92 +52,108 @@ class DataManager:
         """
         Fetch AustralianSuper CSV from the API for a given date range
         Returns DataFrame with columns 'daily_return' and 'price'
+        API returns: Rate Date, High Growth, Balanced, Socially Aware, etc.
+        Values are percentages (e.g. 0.4556 means 0.4556%)
         """
-        start_str = start_date.strftime('%d/%m/%Y')
-        end_str = end_date.strftime('%d/%m/%Y')
-        
-        base_url = "https://www.australiansuper.com//api/graphs/dailyrates/download/"
-        params = {
-            'start': start_str,
-            'end': end_str,
-            'cumulative': 'False',
-            'superType': 'super',
-            'truncateDecimalPlaces': 'True',
-            'outputFilename': f'Daily Rates {start_str.replace("/", " ")} - {end_str.replace("/", " ")}.csv'
-        }
-        url = base_url + "?" + "&".join([f"{k}={v}" for k, v in params.items()])
-        
-        try:
-            # Add headers to request CSV directly without dialog
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/csv,application/csv,text/plain,*/*',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache'
-            }
-            
-            self._log("Fetching AustralianSuper data from API...", 'info')
-            response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-            response.raise_for_status()
-            
-            # Check if response is actually CSV data
-            content_type = response.headers.get('content-type', '').lower()
-            if 'text/csv' in content_type or 'application/csv' in content_type or response.text.startswith('Date,'):
-                data = response.text
-                df = pd.read_csv(pd.StringIO(data))
-                
-                if len(df.columns) >= 2:
-                    df.rename(columns={df.columns[0]: 'date', df.columns[1]: 'daily_return'}, inplace=True)
-                    df['date'] = pd.to_datetime(df['date'], format='%d/%m/%Y', errors='coerce')
-                    df.set_index('date', inplace=True)
-                    df.sort_index(inplace=True)
-                    df['daily_return'] = pd.to_numeric(df['daily_return'], errors='coerce')
-                    df.dropna(subset=['daily_return'], inplace=True)
-                    df['price'] = (1 + df['daily_return']).cumprod() * 100
-                    self._log("✓ Successfully fetched AustralianSuper data", 'success')
-                    return df
-                        
-            self._log("⚠ Response is not CSV data (likely HTML dialog). Using ASX200 as fallback.", 'warning')
-            return self._get_asx200_proxy(start_date, end_date)
-                    
-        except Exception as e:
-            self._log(f"✗ Failed to fetch AustralianSuper data: {e}", 'error')
-            self._log("Using ASX200 as fallback data source", 'info')
-            return self._get_asx200_proxy(start_date, end_date)
+        # TEMPORARY: Skip AustralianSuper API, go straight to ASX200 fallback
+        self._log("Skipping AustralianSuper API (temporary), using ASX200 fallback", 'info')
+        return self._get_asx200_proxy(start_date, end_date)
     
     def _get_asx200_proxy(self, start_date: date, end_date: date) -> pd.DataFrame:
-        """Fallback using ASX200 index"""
-        self._log("Fetching ASX200 data as proxy for AustralianSuper...", 'info')
+        """Fallback using ASX200 daily data from Investing.com (accurate close prices)."""
+        self._log("Fetching daily ASX200 data from Investing.com...", 'info')
         self._log(f"Date range: {start_date} to {end_date}", 'info')
         
         try:
-            asx = yf.download('^AXJO', start=start_date, end=end_date, progress=False)
+            import requests as req
             
-            if asx.empty:
-                self._log("⚠ No ASX200 data available for the specified date range", 'warning')
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'domain-id': 'au',
+            }
+            
+            start_str = start_date.strftime('%Y-%m-%d') if isinstance(start_date, date) else str(start_date)
+            end_str = end_date.strftime('%Y-%m-%d') if isinstance(end_date, date) else str(end_date)
+            
+            url = (
+                f"https://api.investing.com/api/financialdata/historical/171"
+                f"?start-date={start_str}&end-date={end_str}"
+                f"&time-frame=Daily&add-missing-rows=false"
+            )
+            
+            response = req.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            records = response.json().get('data', [])
+            
+            if not records:
+                self._log("⚠ No ASX200 data returned from Investing.com", 'warning')
                 return pd.DataFrame()
             
-            self._log(f"Raw ASX200 data: {len(asx)} records", 'info')
-            returns = asx['Close'].pct_change().dropna()
+            # Parse records into Series — records are newest-first
+            dates = []
+            closes = []
+            for rec in records:
+                dates.append(pd.Timestamp(rec['rowDateTimestamp']))
+                closes.append(float(rec['last_closeRaw']))
+            
+            daily_closes = pd.Series(closes, index=pd.DatetimeIndex(dates).normalize().tz_localize(None))
+            daily_closes = daily_closes[~daily_closes.index.duplicated(keep='first')]
+            daily_closes.sort_index(inplace=True)
+            
+            self._log(f"ASX200 data: {len(daily_closes)} trading days", 'info')
+            returns = daily_closes.pct_change().dropna()
             
             if returns.empty:
-                self._log("⚠ No valid returns calculated from ASX200 data", 'warning')
+                self._log("⚠ No valid returns calculated", 'warning')
+                return pd.DataFrame()
+            
+            fund_data = pd.DataFrame({
+                'daily_return': returns.values,
+                'price': daily_closes.loc[returns.index].values
+            }, index=returns.index)
+            
+            fund_data.index.name = 'date'
+            self._log(f"✓ Successfully fetched {len(fund_data)} records from Investing.com ASX200", 'success')
+            return fund_data
+            
+        except Exception as e:
+            self._log(f"✗ Error fetching Investing.com ASX200 data: {e}", 'error')
+            self._log("Falling back to yfinance daily data...", 'warning')
+            return self._get_asx200_yfinance_fallback(start_date, end_date)
+    
+    def _get_asx200_yfinance_fallback(self, start_date: date, end_date: date) -> pd.DataFrame:
+        """Last resort fallback using yfinance daily data."""
+        try:
+            asx_daily = yf.download('^AXJO', start=start_date, end=end_date, progress=False)
+            
+            if asx_daily.empty:
+                self._log("⚠ No ASX200 data available", 'warning')
+                return pd.DataFrame()
+            
+            if isinstance(asx_daily.columns, pd.MultiIndex):
+                asx_daily.columns = asx_daily.columns.get_level_values(0)
+            
+            daily_closes = asx_daily['Close'].copy()
+            daily_closes = pd.Series(daily_closes.values.flatten().astype(float),
+                                     index=pd.to_datetime(asx_daily.index).normalize())
+            daily_closes = daily_closes[~daily_closes.index.duplicated(keep='last')]
+            daily_closes.sort_index(inplace=True)
+            
+            returns = daily_closes.pct_change().dropna()
+            if returns.empty:
                 return pd.DataFrame()
             
             fund_data = pd.DataFrame({
                 'daily_return': returns.values.flatten(),
-                'price': asx['Close'].loc[returns.index].values.flatten()
+                'price': daily_closes.loc[returns.index].values.flatten()
             }, index=returns.index)
             
-            # Ensure index is named 'date' for consistency with AustralianSuper data
             fund_data.index.name = 'date'
-            self._log(f"✓ Successfully fetched {len(fund_data)} records from ASX200", 'success')
+            self._log(f"✓ Fetched {len(fund_data)} records from yfinance ASX200 (fallback)", 'success')
             return fund_data
-            
         except Exception as e:
-            self._log(f"✗ Error fetching ASX200 data: {e}", 'error')
+            self._log(f"✗ Error fetching yfinance ASX200 data: {e}", 'error')
             return pd.DataFrame()
     
     def update_local_data(self) -> Dict[str, Any]:
@@ -152,8 +168,7 @@ class DataManager:
         
         try:
             if last_date is None:
-                # Limit initial fetch to last 5 years to avoid issues with very old dates
-                start = max(self.start_date.date(), (datetime.now() - timedelta(days=5*365)).date())
+                start = self.start_date.date()
                 self._log(f"Initial data fetch from {start} to {end_date}", 'info')
                 new_data = self.fetch_australiansuper_data(start, end_date)
                 if not new_data.empty:
@@ -382,7 +397,95 @@ class DataManager:
             return pd.DataFrame()
         
         end_date = fund_data.index.max().date()
-        market_data = self.get_market_data(end_date)
+        # yfinance 'end' is exclusive, so add 1 day to include the last date
+        market_end = end_date + timedelta(days=1)
+        market_data = self.get_market_data(market_end)
+        
+        if market_data.empty:
+            return fund_data
+        
+        combined = fund_data.join(market_data, how='left')
+        combined = combined.ffill()
+        combined.dropna(inplace=True)
+        return combined
+    
+    def fetch_live_asx200(self) -> Optional[pd.DataFrame]:
+        """Fetch today's live ASX200 data from Investing.com.
+        Returns a single-row DataFrame with daily_return and price,
+        or None if today's data is not available or already in CSV.
+        """
+        try:
+            import requests as req
+            
+            fund_data = self.load_local_data()
+            if fund_data.empty:
+                return None
+            
+            last_csv_date = fund_data.index.max().date()
+            today = date.today()
+            
+            # Only fetch if today is newer than what's in the CSV
+            if last_csv_date >= today:
+                return None
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'domain-id': 'au',
+            }
+            
+            url = (
+                f"https://api.investing.com/api/financialdata/historical/171"
+                f"?start-date={today.strftime('%Y-%m-%d')}&end-date={today.strftime('%Y-%m-%d')}"
+                f"&time-frame=Daily&add-missing-rows=false"
+            )
+            
+            response = req.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            records = response.json().get('data', [])
+            
+            if not records:
+                self._log("No live ASX200 data available for today", 'info')
+                return None
+            
+            # Use the first (most recent) record
+            rec = records[0]
+            live_price = float(rec['last_closeRaw'])
+            prev_price = float(fund_data['price'].iloc[-1])
+            live_return = (live_price - prev_price) / prev_price
+            
+            live_date = pd.Timestamp(rec['rowDateTimestamp']).normalize().tz_localize(None)
+            
+            live_row = pd.DataFrame({
+                'daily_return': [live_return],
+                'price': [live_price]
+            }, index=pd.DatetimeIndex([live_date], name='date'))
+            
+            self._log(f"✓ Live ASX200: {live_price:.2f} ({live_return*100:+.2f}%) as of {live_date.date()}", 'success')
+            return live_row
+            
+        except Exception as e:
+            self._log(f"⚠ Could not fetch live ASX200 data: {e}", 'warning')
+            return None
+    
+    def prepare_combined_data_for_prediction(self) -> pd.DataFrame:
+        """
+        Like prepare_combined_data but appends today's live ASX200 data
+        so the prediction uses the most current information.
+        """
+        fund_data = self.load_local_data()
+        if fund_data.empty:
+            return pd.DataFrame()
+        
+        # Append live data for today if available
+        live_row = self.fetch_live_asx200()
+        if live_row is not None:
+            fund_data = pd.concat([fund_data, live_row])
+            fund_data = fund_data[~fund_data.index.duplicated(keep='last')]
+            fund_data.sort_index(inplace=True)
+        
+        end_date = fund_data.index.max().date()
+        market_end = end_date + timedelta(days=1)
+        market_data = self.get_market_data(market_end)
         
         if market_data.empty:
             return fund_data

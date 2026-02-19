@@ -13,7 +13,8 @@ class ConfigManager:
         "data": {
             "local_csv_path": "data/australian_super_daily.csv",
             "start_date": "01/07/2008",
-            "end_date_offset_days": 1
+            "end_date_offset_days": 1,
+            "fund_option": "Australian Shares"
         },
         "model": {
             "save_path": "data/model.pkl",
@@ -65,4 +66,3 @@ class ConfigManager:
         for path in data_paths:
             if path and not os.path.exists(path):
                 os.makedirs(path, exist_ok=True)
-                print(f"Created directory: {path}")

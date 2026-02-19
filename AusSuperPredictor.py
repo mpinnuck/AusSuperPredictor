@@ -7,7 +7,7 @@ from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 
 # Application version
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 def main():
     # Load configuration

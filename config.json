@@ -2,13 +2,16 @@
     "data": {
         "local_csv_path": "data/australian_super_daily.csv",
         "start_date": "01/07/2008",
-        "end_date_offset_days": 1
+        "end_date_offset_days": 1,
+        "fund_option": "Australian Shares"
     },
     "model": {
         "save_path": "data/model.pkl",
         "features_save_path": "data/features.pkl",
         "n_estimators": 100,
         "max_depth": 10,
+        "min_samples_split": 10,
+        "min_samples_leaf": 5,
         "random_state": 42
     },
     "logging": {
