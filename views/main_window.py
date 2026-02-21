@@ -26,8 +26,8 @@ class MainWindow:
         # Center window on screen
         self._center_window()
         
-        # Bind ViewModel callbacks
-        self.viewmodel.on_state_changed = self.update_ui
+        # Bind ViewModel callbacks (schedule on main thread for tkinter safety)
+        self.viewmodel.on_state_changed = lambda: self.root.after_idle(self.update_ui)
         self.viewmodel.on_log_updated = self._process_log_queue
         
         # Build UI

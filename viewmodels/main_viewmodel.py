@@ -107,6 +107,28 @@ class MainViewModel:
         
         def worker():
             try:
+                # ── Load previous training snapshot for comparison
+                prev = self.model_manager.load_training_snapshot()
+                if prev:
+                    self.log_queue.put(f"\nPrevious model (trained {prev.get('trained_at', '?')[:16]}):", 'info')
+                    self.log_queue.put(
+                        f"  Train acc: {prev['train_accuracy']:.3f}  "
+                        f"Test acc: {prev['test_accuracy']:.3f}", 'info'
+                    )
+                    prev_cal = prev.get('calibration')
+                    if prev_cal:
+                        self.log_queue.put(
+                            f"  ECE: {prev_cal['ece']:.4f}  MCE: {prev_cal['mce']:.4f}", 'info'
+                        )
+                    prev_feats = prev.get('feature_importance', [])
+                    if prev_feats:
+                        self.log_queue.put("  Top 10 features:", 'info')
+                        for feat in prev_feats:
+                            self.log_queue.put(
+                                f"    {feat['feature']}: {feat['importance']:.4f}", 'info'
+                            )
+                    self.log_queue.put("", 'info')  # blank line separator
+
                 self.log_queue.put("Loading combined data...", 'info')
                 combined = self.data_manager.prepare_combined_data()
                 
@@ -149,6 +171,40 @@ class MainViewModel:
                             f"ECE: {cal['expected_calibration_error']:.4f}  "
                             f"MCE: {cal['max_calibration_error']:.4f}", 'info'
                         )
+
+                    # ── Show delta comparison with previous model
+                    if prev:
+                        self.log_queue.put("\n── Changes from previous model ──", 'info')
+                        # Accuracy delta
+                        d_train = result['train_accuracy'] - prev.get('train_accuracy', 0)
+                        d_test = result['test_accuracy'] - prev.get('test_accuracy', 0)
+                        self.log_queue.put(
+                            f"  Train acc: {d_train:+.3f}  Test acc: {d_test:+.3f}",
+                            'success' if d_test > 0 else ('error' if d_test < 0 else 'info'),
+                        )
+                        # ECE/MCE delta
+                        prev_cal = prev.get('calibration')
+                        if cal and prev_cal:
+                            d_ece = cal['expected_calibration_error'] - prev_cal.get('ece', 0)
+                            d_mce = cal['max_calibration_error'] - prev_cal.get('mce', 0)
+                            self.log_queue.put(
+                                f"  ECE: {d_ece:+.4f}  MCE: {d_mce:+.4f}",
+                                'success' if d_ece < 0 else ('error' if d_ece > 0 else 'info'),
+                            )
+                        # Feature importance comparison
+                        prev_feats = {f['feature']: f['importance'] for f in prev.get('feature_importance', [])}
+                        new_feats = {f['feature']: f['importance'] for f in result['feature_importance']}
+                        if prev_feats:
+                            self.log_queue.put("  Feature weight changes (top 10):", 'info')
+                            for feat in result['feature_importance']:
+                                name = feat['feature']
+                                new_imp = feat['importance']
+                                old_imp = prev_feats.get(name, 0)
+                                delta = new_imp - old_imp
+                                arrow = '▲' if delta > 0.005 else ('▼' if delta < -0.005 else '─')
+                                self.log_queue.put(
+                                    f"    {arrow} {name}: {new_imp:.4f} ({delta:+.4f})", 'info'
+                                )
                 else:
                     self.log_queue.put(f"Error training model: {result['message']}", 'error')
                     

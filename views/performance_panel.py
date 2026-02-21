@@ -28,12 +28,12 @@ class PerformancePanel(tk.Frame):
 
         # Scrollable content area
         self.text = scrolledtext.ScrolledText(
-            self, wrap=tk.WORD, font=('Courier', 11), state=tk.DISABLED
+            self, wrap=tk.WORD, state=tk.DISABLED
         )
         self.text.grid(row=1, column=0, sticky='nsew')
 
         # Colour tags
-        self.text.tag_config('header', foreground='#1a1a2e', font=('Courier', 12, 'bold'))
+        self.text.tag_config('header', foreground='#1a1a2e', font=('TkDefaultFont', 0, 'bold'))
         self.text.tag_config('good', foreground='green')
         self.text.tag_config('bad', foreground='red')
         self.text.tag_config('neutral', foreground='black')

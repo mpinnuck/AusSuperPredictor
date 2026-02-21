@@ -4,6 +4,7 @@ Now saves models to the data folder
 """
 import pandas as pd
 import numpy as np
+import json as _json
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -30,6 +31,9 @@ class ModelManager:
         self.min_samples_split = config['model'].get('min_samples_split', 2)
         self.min_samples_leaf = config['model'].get('min_samples_leaf', 1)
         self.random_state = config['model'].get('random_state', 42)
+        self.training_snapshot_path = os.path.join(
+            os.path.dirname(self.model_path), 'last_training.json'
+        )
         
         # Ensure data directory exists
         self._ensure_data_directory()
@@ -240,6 +244,9 @@ class ModelManager:
             except Exception as cal_err:
                 self._log(f"⚠ Calibration computation failed: {cal_err}", 'warning')
             
+            # Save training snapshot for future comparison
+            self._save_training_snapshot(result)
+            
         except Exception as e:
             result["success"] = False
             result["message"] = str(e)
@@ -269,6 +276,42 @@ class ModelManager:
                 self._log(f"⚠ Cross-validation failed: {e}", 'warning')
         
         return result
+
+    # ── Training Snapshot ─────────────────────────────────────────────
+
+    def _save_training_snapshot(self, result: Dict[str, Any]) -> None:
+        """Persist key training metrics so the next run can show a comparison."""
+        snapshot = {
+            'trained_at': datetime.now().isoformat(),
+            'train_accuracy': result.get('train_accuracy'),
+            'test_accuracy': result.get('test_accuracy'),
+            'precision': result.get('precision'),
+            'recall': result.get('recall'),
+            'f1_score': result.get('f1_score'),
+            'feature_importance': result.get('feature_importance'),  # list of dicts
+        }
+        cal = result.get('calibration')
+        if cal:
+            snapshot['calibration'] = {
+                'ece': cal['expected_calibration_error'],
+                'mce': cal['max_calibration_error'],
+                'table': cal['calibration_table'],
+            }
+        try:
+            with open(self.training_snapshot_path, 'w') as f:
+                _json.dump(snapshot, f, indent=2, default=str)
+        except Exception as e:
+            self._log(f"⚠ Could not save training snapshot: {e}", 'warning')
+
+    def load_training_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Load the previous training snapshot, or None if unavailable."""
+        if not os.path.exists(self.training_snapshot_path):
+            return None
+        try:
+            with open(self.training_snapshot_path) as f:
+                return _json.load(f)
+        except Exception:
+            return None
     
     def load_model(self) -> bool:
         """Load pre-trained model if exists"""
