@@ -231,6 +231,15 @@ class ModelManager:
             
             self._log(f"✓ Model training complete. Test accuracy: {result['test_accuracy']:.3f}", 'success')
             
+            # Compute calibration on the test set
+            try:
+                y_test_prob = self.model.predict_proba(X_test)[:, 1]
+                calib = self._calibration_from_arrays(y_test_prob, y_test.values)
+                result['calibration'] = calib
+                self._log(f"✓ Calibration computed (ECE={calib['expected_calibration_error']:.4f})", 'success')
+            except Exception as cal_err:
+                self._log(f"⚠ Calibration computation failed: {cal_err}", 'warning')
+            
         except Exception as e:
             result["success"] = False
             result["message"] = str(e)
@@ -347,6 +356,127 @@ class ModelManager:
             self._log(f"✗ Prediction failed: {e}", 'error')
             return None
     
+    # ── Calibration & Decision ─────────────────────────────────────
+
+    def evaluate_calibration(self, df: pd.DataFrame, bins: int = 10) -> Dict:
+        """Evaluate calibration of probability predictions on a labelled DataFrame.
+
+        Args:
+            df: DataFrame with features (must include 'target' column)
+            bins: Number of equal-width probability bins (default 10)
+
+        Returns:
+            Dictionary with calibration table and overall metrics
+        """
+        if self.model is None and not self.load_model():
+            return {}
+
+        X = df[self.feature_columns]
+        y_true = df['target'].values
+        y_prob = self.model.predict_proba(X)[:, 1]
+        return self._calibration_from_arrays(y_prob, y_true, bins)
+
+    def _calibration_from_arrays(
+        self, y_prob: np.ndarray, y_true: np.ndarray, bins: int = 10
+    ) -> Dict:
+        """Build a calibration table from probability and truth arrays."""
+        bin_edges = np.linspace(0, 1, bins + 1)
+        bin_indices = np.digitize(y_prob, bin_edges) - 1
+
+        calibration_table = []
+        for i in range(bins):
+            mask = bin_indices == i
+            count = int(np.sum(mask))
+            if count == 0:
+                continue
+            pred_mean = float(np.mean(y_prob[mask]))
+            actual_freq = float(np.mean(y_true[mask]))
+            calibration_table.append({
+                'bin': f"{bin_edges[i]:.2f}-{bin_edges[i+1]:.2f}",
+                'predicted_prob': round(pred_mean, 4),
+                'actual_freq': round(actual_freq, 4),
+                'count': count,
+            })
+
+        return {
+            'calibration_table': calibration_table,
+            'expected_calibration_error': self._compute_ece(y_prob, y_true, bin_edges),
+            'max_calibration_error': self._compute_mce(y_prob, y_true, bin_edges),
+        }
+
+    @staticmethod
+    def _compute_ece(y_prob, y_true, bin_edges) -> float:
+        """Expected Calibration Error."""
+        bin_indices = np.digitize(y_prob, bin_edges) - 1
+        n = len(y_prob)
+        ece = 0.0
+        for i in range(len(bin_edges) - 1):
+            mask = bin_indices == i
+            count = np.sum(mask)
+            if count == 0:
+                continue
+            ece += (count / n) * abs(float(np.mean(y_prob[mask])) - float(np.mean(y_true[mask])))
+        return float(ece)
+
+    @staticmethod
+    def _compute_mce(y_prob, y_true, bin_edges) -> float:
+        """Maximum Calibration Error."""
+        bin_indices = np.digitize(y_prob, bin_edges) - 1
+        mce = 0.0
+        for i in range(len(bin_edges) - 1):
+            mask = bin_indices == i
+            if np.sum(mask) == 0:
+                continue
+            mce = max(mce, abs(float(np.mean(y_prob[mask])) - float(np.mean(y_true[mask]))))
+        return float(mce)
+
+    def get_decision(
+        self, df: pd.DataFrame, threshold: float = 0.6
+    ) -> Dict[str, Any]:
+        """Return a decision recommendation based on prediction confidence.
+
+        Args:
+            df: DataFrame with latest engineered features
+            threshold: Minimum probability to act (default 0.6)
+
+        Returns:
+            Dictionary with decision, probability, confidence level,
+            and full feature details from predict().
+        """
+        result = self.predict(df)
+        if result is None:
+            return {'decision': 'NO_PREDICTION', 'probability': None}
+
+        prob = result['probability']
+
+        # Confidence level
+        if prob >= 0.9 or prob <= 0.1:
+            level = 'VERY_HIGH'
+        elif prob >= 0.8 or prob <= 0.2:
+            level = 'HIGH'
+        elif prob >= 0.7 or prob <= 0.3:
+            level = 'MODERATE'
+        elif prob >= 0.6 or prob <= 0.4:
+            level = 'LOW'
+        else:
+            level = 'VERY_LOW'
+
+        # Direction decision
+        if prob >= threshold:
+            decision = 'POSITIVE_EXPECTED'
+        elif prob <= 1 - threshold:
+            decision = 'NEGATIVE_EXPECTED'
+        else:
+            decision = 'NEUTRAL'
+
+        return {
+            'decision': decision,
+            'probability': prob,
+            'confidence_level': level,
+            'threshold_used': threshold,
+            'feature_details': result['feature_details'],
+        }
+
     def get_feature_importance_data(self, top_n: int = 20) -> Dict:
         """Get feature importance data formatted for visualization"""
         if self.model is None:

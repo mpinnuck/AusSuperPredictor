@@ -133,6 +133,22 @@ class MainViewModel:
                     self.log_queue.put("\nTop 10 features:", 'info')
                     for feat in result["feature_importance"]:
                         self.log_queue.put(f"  {feat['feature']}: {feat['importance']:.4f}", 'info')
+                    
+                    # Log calibration analysis
+                    cal = result.get('calibration')
+                    if cal:
+                        self.log_queue.put("\nCalibration Analysis (test set):", 'info')
+                        self.log_queue.put(f"{'Bin':<12} {'Predicted':>9} {'Actual':>9} {'Count':>6}", 'info')
+                        self.log_queue.put(f"{'-'*12} {'-'*9} {'-'*9} {'-'*6}", 'info')
+                        for row in cal['calibration_table']:
+                            self.log_queue.put(
+                                f"{row['bin']:<12} {row['predicted_prob']:>9.4f} "
+                                f"{row['actual_freq']:>9.4f} {row['count']:>6}", 'info'
+                            )
+                        self.log_queue.put(
+                            f"ECE: {cal['expected_calibration_error']:.4f}  "
+                            f"MCE: {cal['max_calibration_error']:.4f}", 'info'
+                        )
                 else:
                     self.log_queue.put(f"Error training model: {result['message']}", 'error')
                     
@@ -182,11 +198,12 @@ class MainViewModel:
                     self.log_queue.put("No trained model found. Please train first.", 'error')
                     return
                 
-                result = self.model_manager.predict(combined)
+                # Get decision with confidence analysis
+                decision = self.model_manager.get_decision(combined, threshold=0.6)
                 
-                if result is not None:
-                    prob = result['probability']
-                    feature_details = result['feature_details']
+                if decision['probability'] is not None:
+                    prob = decision['probability']
+                    feature_details = decision['feature_details']
                     
                     latest_date = combined.index[-1]
                     latest_date_str = latest_date.strftime('%Y-%m-%d')
@@ -211,19 +228,16 @@ class MainViewModel:
                     self.log_queue.put(f"Probability of NEGATIVE return: {(1-prob)*100:.1f}%", 
                                       'error' if prob<0.5 else 'info')
                     
-                    # Signal
-                    if prob > 0.6:
-                        signal = "STRONG BUY SIGNAL"
-                    elif prob > 0.55:
-                        signal = "WEAK BUY SIGNAL"
-                    elif prob < 0.4:
-                        signal = "STRONG SELL SIGNAL"
-                    elif prob < 0.45:
-                        signal = "WEAK SELL SIGNAL"
-                    else:
-                        signal = "NEUTRAL"
-                    
-                    self.log_queue.put(f"Signal: {signal}", 'info')
+                    # Decision & confidence
+                    self.log_queue.put(
+                        f"Confidence: {decision['confidence_level']}  "
+                        f"(threshold={decision['threshold_used']})", 'info'
+                    )
+                    dec = decision['decision']
+                    dec_level = ('success' if 'POSITIVE' in dec
+                                 else 'error' if 'NEGATIVE' in dec
+                                 else 'info')
+                    self.log_queue.put(f"Decision: {dec}", dec_level)
                     self.log_queue.put('='*50, 'info')
                     
                     # Log top feature inputs
@@ -249,7 +263,7 @@ class MainViewModel:
                         base_price=latest_price,
                         probability=prob,
                         predicted_up=predicted_up,
-                        signal=signal,
+                        signal=dec,
                         feature_details=feature_details,
                     )
                 else:
