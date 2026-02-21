@@ -160,6 +160,11 @@ class MainViewModel:
         
         def worker():
             try:
+                # ── Step 1: back-fill any previous predictions with actual results
+                updated = self.data_manager.update_prediction_history()
+                if updated:
+                    self.log_queue.put(f"Back-filled {updated} previous prediction(s) with actual results", 'info')
+
                 self.log_queue.put("Loading combined data with live ASX200...", 'info')
                 combined = self.data_manager.prepare_combined_data_for_prediction()
                 
@@ -194,6 +199,8 @@ class MainViewModel:
                     while next_day.weekday() >= 5:  # 5=Sat, 6=Sun
                         next_day += timedelta(days=1)
                     prediction_date_str = next_day.strftime('%Y-%m-%d')
+                    
+                    predicted_up = 1 if prob > 0.5 else 0
                     
                     self.log_queue.put(f"\n{'='*50}", 'info')
                     self.log_queue.put(f"ASX200 latest price: {latest_price:,.2f} ({latest_date_str})", 'info')
@@ -234,6 +241,17 @@ class MainViewModel:
                         self.log_queue.put(
                             f"{fd['name']:<30} {val_str} {imp:>10.4f}", 'info'
                         )
+                    
+                    # ── Step 3: save prediction to history CSV
+                    self.data_manager.save_prediction_to_history(
+                        prediction_date=prediction_date_str,
+                        base_date=latest_date_str,
+                        base_price=latest_price,
+                        probability=prob,
+                        predicted_up=predicted_up,
+                        signal=signal,
+                        feature_details=feature_details,
+                    )
                 else:
                     self.log_queue.put("Prediction failed.", 'error')
                     

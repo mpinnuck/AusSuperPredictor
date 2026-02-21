@@ -518,6 +518,111 @@ class DataManager:
         combined.dropna(subset=['daily_return', 'price'], inplace=True)
         return combined
     
+    # ── Prediction History ───────────────────────────────────────────
+    HISTORY_PATH = 'data/asx200history.csv'
+
+    def update_prediction_history(self) -> int:
+        """Back-fill actual close prices and success flags for past predictions.
+
+        For every row in the history CSV where ``actual_close`` is NaN,
+        look up the real ASX200 close for that ``prediction_date`` from the
+        Investing.com data already stored in the local CSV.  If the date
+        is today and we have a live price, use that too.
+
+        Returns the number of rows updated.
+        """
+        if not os.path.exists(self.HISTORY_PATH):
+            return 0
+
+        hist = pd.read_csv(self.HISTORY_PATH)
+        if hist.empty or 'actual_close' not in hist.columns:
+            return 0
+
+        pending = hist['actual_close'].isna()
+        if not pending.any():
+            return 0
+
+        # Load prices we already know (CSV + live)
+        fund = self.load_local_data()
+        live = self.fetch_live_asx200()
+        if live is not None:
+            fund = pd.concat([fund, live])
+            fund = fund[~fund.index.duplicated(keep='last')]
+
+        price_lookup = fund['price']           # Series  date→price
+        return_lookup = fund['daily_return']    # Series  date→return
+
+        updated = 0
+        for idx in hist.index[pending]:
+            pred_date = pd.Timestamp(hist.at[idx, 'prediction_date'])
+            if pred_date in price_lookup.index:
+                actual_close = price_lookup[pred_date]
+                actual_return = return_lookup[pred_date]
+                predicted_up = hist.at[idx, 'predicted_up']
+
+                # Success = direction matches
+                actual_up = 1 if actual_return > 0 else 0
+                success = 1 if int(predicted_up) == actual_up else 0
+
+                hist.at[idx, 'actual_close'] = actual_close
+                hist.at[idx, 'actual_return'] = actual_return
+                hist.at[idx, 'success'] = success
+                updated += 1
+
+        if updated:
+            hist.to_csv(self.HISTORY_PATH, index=False, float_format='%.6f')
+            self._log(f"✓ Updated {updated} prediction(s) in history with actual results", 'success')
+
+        return updated
+
+    def save_prediction_to_history(
+        self,
+        prediction_date: str,
+        base_date: str,
+        base_price: float,
+        probability: float,
+        predicted_up: int,
+        signal: str,
+        feature_details: list,
+    ) -> None:
+        """Append one prediction row to the history CSV.
+
+        ``feature_details`` is the list of dicts returned by
+        ``ModelManager.predict()`` — each with *name*, *value*, *importance*.
+        All feature values are stored as individual columns so you can
+        inspect exactly what the model saw.
+        """
+        row = {
+            'prediction_date': prediction_date,
+            'run_date': date.today().isoformat(),
+            'base_date': base_date,
+            'base_price': base_price,
+            'probability': probability,
+            'predicted_up': predicted_up,
+            'signal': signal,
+        }
+
+        # Add every feature value as its own column
+        for fd in feature_details:
+            row[f"feat_{fd['name']}"] = fd['value']
+
+        row['actual_close'] = None
+        row['actual_return'] = None
+        row['success'] = None
+
+        new_row = pd.DataFrame([row])
+
+        if os.path.exists(self.HISTORY_PATH):
+            hist = pd.read_csv(self.HISTORY_PATH)
+            # Don't duplicate — overwrite if same prediction_date exists
+            hist = hist[hist['prediction_date'] != prediction_date]
+            hist = pd.concat([hist, new_row], ignore_index=True)
+        else:
+            hist = new_row
+
+        hist.to_csv(self.HISTORY_PATH, index=False, float_format='%.6f')
+        self._log(f"✓ Saved prediction for {prediction_date} to history", 'success')
+
     def _log(self, message: str, level: str = 'info'):
         """Log a message to the queue if available, otherwise print to console"""
         if self.log_queue:
