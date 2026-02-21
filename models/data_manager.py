@@ -518,6 +518,58 @@ class DataManager:
         combined.dropna(subset=['daily_return', 'price'], inplace=True)
         return combined
     
+    # ── Market Regime Classification ──────────────────────────────────
+
+    def classify_market_regime(self, lookback: int = 20) -> str:
+        """Classify the current market regime from recent price data.
+
+        Returns one of: 'TRENDING_UP', 'TRENDING_DOWN', 'VOLATILE', 'RANGE_BOUND'
+
+        Logic:
+          - Compute rolling std of daily returns (volatility)
+          - Compute rolling mean of daily returns (trend)
+          - High vol (> 1.5× long-term avg) → VOLATILE
+          - Strong positive trend → TRENDING_UP
+          - Strong negative trend → TRENDING_DOWN
+          - Otherwise → RANGE_BOUND
+        """
+        fund = self.load_local_data()
+        if fund is None or len(fund) < lookback * 2:
+            return 'UNKNOWN'
+
+        returns = fund['daily_return'].dropna()
+        recent = returns.tail(lookback)
+        long_term_vol = returns.std()
+        recent_vol = recent.std()
+        recent_mean = recent.mean()
+
+        # Thresholds
+        vol_ratio = recent_vol / long_term_vol if long_term_vol > 0 else 1.0
+        trend_threshold = long_term_vol * 0.3  # ~30% of 1-std as trend signal
+
+        if vol_ratio > 1.5:
+            return 'VOLATILE'
+        elif recent_mean > trend_threshold:
+            return 'TRENDING_UP'
+        elif recent_mean < -trend_threshold:
+            return 'TRENDING_DOWN'
+        else:
+            return 'RANGE_BOUND'
+
+    # ── Model Version Tracking ───────────────────────────────────────
+
+    def get_model_version(self) -> str:
+        """Return a version identifier for the current trained model.
+
+        Format: 'YYYYMMDD_HHMMSS' based on the model file's modification time.
+        Returns 'unknown' if the model file doesn't exist.
+        """
+        model_path = self.config.get('model', {}).get('save_path', 'data/model.pkl')
+        if os.path.exists(model_path):
+            mtime = os.path.getmtime(model_path)
+            return datetime.fromtimestamp(mtime).strftime('%Y%m%d_%H%M%S')
+        return 'unknown'
+
     # ── Prediction History ───────────────────────────────────────────
     HISTORY_PATH = 'data/asx200history.csv'
 
@@ -540,7 +592,10 @@ class DataManager:
 
         pending = hist['actual_close'].isna()
         if not pending.any():
-            return 0
+            # Even if no new back-fills needed, patch legacy rows
+            # that are missing the newer columns
+            updated_legacy = self._backfill_legacy_columns(hist)
+            return updated_legacy
 
         # Load prices we already know (CSV + live)
         fund = self.load_local_data()
@@ -567,13 +622,86 @@ class DataManager:
                 hist.at[idx, 'actual_close'] = actual_close
                 hist.at[idx, 'actual_return'] = actual_return
                 hist.at[idx, 'success'] = success
+
+                # Descriptive result label
+                if int(predicted_up) == 1 and actual_up == 1:
+                    hist.at[idx, 'result_label'] = 'CORRECT_UP'
+                elif int(predicted_up) == 0 and actual_up == 0:
+                    hist.at[idx, 'result_label'] = 'CORRECT_DOWN'
+                elif int(predicted_up) == 1 and actual_up == 0:
+                    hist.at[idx, 'result_label'] = 'WRONG_UP'
+                else:
+                    hist.at[idx, 'result_label'] = 'WRONG_DOWN'
+
+                # Hypothetical return: gain if followed the signal
+                # If predicted UP → you bought → actual_return
+                # If predicted DOWN → you shorted → -actual_return
+                # If NEUTRAL → you did nothing → 0
+                signal_str = str(hist.at[idx, 'signal']) if 'signal' in hist.columns else ''
+                if 'POSITIVE' in signal_str:
+                    hist.at[idx, 'hypothetical_return'] = actual_return
+                elif 'NEGATIVE' in signal_str:
+                    hist.at[idx, 'hypothetical_return'] = -actual_return
+                else:
+                    hist.at[idx, 'hypothetical_return'] = 0.0
+
                 updated += 1
 
         if updated:
             hist.to_csv(self.HISTORY_PATH, index=False, float_format='%.6f')
             self._log(f"✓ Updated {updated} prediction(s) in history with actual results", 'success')
 
+        # Also patch any legacy rows missing the newer columns
+        self._backfill_legacy_columns(hist)
+
         return updated
+
+    def _backfill_legacy_columns(self, hist: pd.DataFrame) -> int:
+        """Patch older history rows that lack result_label / hypothetical_return.
+
+        Returns number of rows patched.
+        """
+        patched = 0
+        completed = hist.dropna(subset=['success'])
+
+        for idx in completed.index:
+            needs_patch = False
+
+            # result_label
+            if 'result_label' not in hist.columns or pd.isna(hist.at[idx, 'result_label']):
+                needs_patch = True
+                predicted_up = int(hist.at[idx, 'predicted_up'])
+                actual_return = hist.at[idx, 'actual_return']
+                actual_up = 1 if actual_return > 0 else 0
+                if predicted_up == 1 and actual_up == 1:
+                    hist.at[idx, 'result_label'] = 'CORRECT_UP'
+                elif predicted_up == 0 and actual_up == 0:
+                    hist.at[idx, 'result_label'] = 'CORRECT_DOWN'
+                elif predicted_up == 1 and actual_up == 0:
+                    hist.at[idx, 'result_label'] = 'WRONG_UP'
+                else:
+                    hist.at[idx, 'result_label'] = 'WRONG_DOWN'
+
+            # hypothetical_return
+            if 'hypothetical_return' not in hist.columns or pd.isna(hist.at[idx, 'hypothetical_return']):
+                needs_patch = True
+                actual_return = hist.at[idx, 'actual_return']
+                signal_str = str(hist.at[idx, 'signal']) if 'signal' in hist.columns else ''
+                if 'POSITIVE' in signal_str:
+                    hist.at[idx, 'hypothetical_return'] = actual_return
+                elif 'NEGATIVE' in signal_str:
+                    hist.at[idx, 'hypothetical_return'] = -actual_return
+                else:
+                    hist.at[idx, 'hypothetical_return'] = 0.0
+
+            if needs_patch:
+                patched += 1
+
+        if patched:
+            hist.to_csv(self.HISTORY_PATH, index=False, float_format='%.6f')
+            self._log(f"✓ Patched {patched} legacy row(s) with result_label/hypothetical_return", 'info')
+
+        return patched
 
     def save_prediction_to_history(
         self,
@@ -583,7 +711,10 @@ class DataManager:
         probability: float,
         predicted_up: int,
         signal: str,
+        confidence_level: str,
         feature_details: list,
+        model_version: str = 'unknown',
+        market_regime: str = 'UNKNOWN',
     ) -> None:
         """Append one prediction row to the history CSV.
 
@@ -600,6 +731,9 @@ class DataManager:
             'probability': probability,
             'predicted_up': predicted_up,
             'signal': signal,
+            'confidence_level': confidence_level,
+            'model_version': model_version,
+            'market_regime': market_regime,
         }
 
         # Add every feature value as its own column
@@ -609,6 +743,8 @@ class DataManager:
         row['actual_close'] = None
         row['actual_return'] = None
         row['success'] = None
+        row['result_label'] = None
+        row['hypothetical_return'] = None
 
         new_row = pd.DataFrame([row])
 
@@ -622,6 +758,221 @@ class DataManager:
 
         hist.to_csv(self.HISTORY_PATH, index=False, float_format='%.6f')
         self._log(f"✓ Saved prediction for {prediction_date} to history", 'success')
+
+    # ── Performance Analysis ──────────────────────────────────────────
+
+    def get_prediction_performance(self, min_predictions: int = 5) -> Optional[Dict[str, Any]]:
+        """Return a summary of prediction performance from the history CSV.
+
+        Returns None if there aren't enough completed predictions.
+        """
+        if not os.path.exists(self.HISTORY_PATH):
+            return None
+
+        hist = pd.read_csv(self.HISTORY_PATH)
+        completed = hist.dropna(subset=['success'])
+        if len(completed) < min_predictions:
+            return None
+
+        total = len(completed)
+        correct = int(completed['success'].sum())
+        accuracy = correct / total
+
+        # Day-of-week breakdown
+        completed = completed.copy()
+        completed['dow'] = pd.to_datetime(completed['prediction_date']).dt.day_name()
+        dow_stats = (
+            completed.groupby('dow')['success']
+            .agg(['mean', 'count'])
+            .rename(columns={'mean': 'accuracy', 'count': 'n'})
+        )
+        # Order Mon-Fri
+        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+        dow_stats = dow_stats.reindex([d for d in day_order if d in dow_stats.index])
+
+        # Confidence-level breakdown
+        conf_stats = None
+        if 'confidence_level' in completed.columns:
+            conf_stats = (
+                completed.groupby('confidence_level')['success']
+                .agg(['mean', 'count'])
+                .rename(columns={'mean': 'accuracy', 'count': 'n'})
+            )
+            level_order = ['VERY_LOW', 'LOW', 'MODERATE', 'HIGH', 'VERY_HIGH']
+            conf_stats = conf_stats.reindex([l for l in level_order if l in conf_stats.index])
+
+        # Rolling accuracy (last 10 / 20 / all)
+        recent_10 = completed.tail(10)['success'].mean() if total >= 10 else None
+        recent_20 = completed.tail(20)['success'].mean() if total >= 20 else None
+
+        # Hypothetical returns
+        hyp = {}
+        if 'hypothetical_return' in completed.columns:
+            h = completed['hypothetical_return'].dropna()
+            if len(h) > 0:
+                hyp['total_return'] = float(h.sum())
+                hyp['mean_return'] = float(h.mean())
+                hyp['cumulative_pct'] = float(((1 + h).prod() - 1))
+                hyp['win_rate'] = float((h > 0).mean())
+                hyp['n_trades'] = int((h != 0).sum())
+                hyp['avg_win'] = float(h[h > 0].mean()) if (h > 0).any() else 0.0
+                hyp['avg_loss'] = float(h[h < 0].mean()) if (h < 0).any() else 0.0
+
+        # By market regime
+        regime_stats = {}
+        if 'market_regime' in completed.columns:
+            rs = (
+                completed.groupby('market_regime')['success']
+                .agg(['mean', 'count'])
+                .rename(columns={'mean': 'accuracy', 'count': 'n'})
+            )
+            regime_stats = rs.to_dict('index') if not rs.empty else {}
+
+        # By model version
+        version_stats = {}
+        if 'model_version' in completed.columns:
+            vs = (
+                completed.groupby('model_version')['success']
+                .agg(['mean', 'count'])
+                .rename(columns={'mean': 'accuracy', 'count': 'n'})
+            )
+            version_stats = vs.to_dict('index') if not vs.empty else {}
+
+        return {
+            'total': total,
+            'correct': correct,
+            'accuracy': accuracy,
+            'recent_10': recent_10,
+            'recent_20': recent_20,
+            'by_day': dow_stats.to_dict('index') if not dow_stats.empty else {},
+            'by_confidence': conf_stats.to_dict('index') if conf_stats is not None and not conf_stats.empty else {},
+            'hypothetical': hyp,
+            'by_regime': regime_stats,
+            'by_model_version': version_stats,
+        }
+
+    def analyze_thresholds(self, step: float = 0.05) -> Optional[pd.DataFrame]:
+        """Find optimal probability threshold from history.
+
+        Returns a DataFrame with threshold / accuracy / trade-count,
+        or None if not enough data.
+        """
+        if not os.path.exists(self.HISTORY_PATH):
+            return None
+
+        hist = pd.read_csv(self.HISTORY_PATH).dropna(subset=['success'])
+        if len(hist) < 10:
+            return None
+
+        thresholds = np.arange(0.50, 0.95, step)
+        rows = []
+        for t in thresholds:
+            # Positive-direction trades above threshold
+            pos = hist[hist['probability'] >= t]
+            # Negative-direction trades below 1-threshold
+            neg = hist[hist['probability'] <= 1 - t]
+            trades = pd.concat([pos, neg])
+            if len(trades) >= 5:
+                rows.append({
+                    'threshold': round(float(t), 2),
+                    'accuracy': trades['success'].mean(),
+                    'trades': len(trades),
+                    'correct': int(trades['success'].sum()),
+                })
+
+        if not rows:
+            return None
+        return pd.DataFrame(rows).sort_values('accuracy', ascending=False)
+
+    PERF_LOG_PATH = 'data/performance_log.csv'
+
+    def save_performance_snapshot(self) -> None:
+        """Append a daily summary row to performance_log.csv.
+
+        Records the aggregated accuracy metrics at the time of the call
+        so you can track how model performance evolves over time.
+        Skips writing if a row for today already exists.
+        """
+        perf = self.get_prediction_performance(min_predictions=1)
+        if perf is None:
+            return
+
+        today = date.today().isoformat()
+
+        # Don't duplicate today's snapshot
+        if os.path.exists(self.PERF_LOG_PATH):
+            existing = pd.read_csv(self.PERF_LOG_PATH)
+            if today in existing['snapshot_date'].values:
+                return
+
+        # Best threshold from analyze_thresholds
+        best_threshold = None
+        best_threshold_acc = None
+        try:
+            th = self.analyze_thresholds()
+            if th is not None and not th.empty:
+                best = th.iloc[0]
+                best_threshold = best['threshold']
+                best_threshold_acc = best['accuracy']
+        except Exception:
+            pass
+
+        drift = self.detect_model_drift()
+
+        row = {
+            'snapshot_date': today,
+            'total_predictions': perf['total'],
+            'correct': perf['correct'],
+            'accuracy': round(perf['accuracy'], 4),
+            'recent_10': round(perf['recent_10'], 4) if perf.get('recent_10') is not None else None,
+            'recent_20': round(perf['recent_20'], 4) if perf.get('recent_20') is not None else None,
+            'best_threshold': best_threshold,
+            'best_threshold_acc': best_threshold_acc,
+            'drift_detected': drift,
+        }
+
+        new_row = pd.DataFrame([row])
+        if os.path.exists(self.PERF_LOG_PATH):
+            log = pd.read_csv(self.PERF_LOG_PATH)
+            log = pd.concat([log, new_row], ignore_index=True)
+        else:
+            log = new_row
+
+        log.to_csv(self.PERF_LOG_PATH, index=False)
+        self._log(f"✓ Performance snapshot saved for {today}", 'info')
+
+    def get_performance_log(self) -> Optional[pd.DataFrame]:
+        """Return the full performance_log.csv as a DataFrame, or None."""
+        if not os.path.exists(self.PERF_LOG_PATH):
+            return None
+        log = pd.read_csv(self.PERF_LOG_PATH)
+        return log if not log.empty else None
+
+    def detect_model_drift(self, window: int = 20, drop_pct: float = 0.10) -> bool:
+        """Return True if recent accuracy is significantly worse than overall.
+
+        Args:
+            window: number of most-recent completed predictions to check
+            drop_pct: accuracy drop that triggers the warning (default 10%)
+        """
+        if not os.path.exists(self.HISTORY_PATH):
+            return False
+
+        hist = pd.read_csv(self.HISTORY_PATH).dropna(subset=['success'])
+        if len(hist) < window:
+            return False
+
+        overall = hist['success'].mean()
+        recent = hist.tail(window)['success'].mean()
+
+        if recent < overall - drop_pct:
+            self._log(
+                f"⚠ Model drift detected! Recent {window} accuracy: "
+                f"{recent:.1%} vs overall: {overall:.1%}",
+                'warning',
+            )
+            return True
+        return False
 
     def _log(self, message: str, level: str = 'info'):
         """Log a message to the queue if available, otherwise print to console"""

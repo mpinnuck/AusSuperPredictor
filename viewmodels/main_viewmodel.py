@@ -181,6 +181,27 @@ class MainViewModel:
                 if updated:
                     self.log_queue.put(f"Back-filled {updated} previous prediction(s) with actual results", 'info')
 
+                # ── Step 1b: show performance stats & drift warning
+                perf = self.data_manager.get_prediction_performance(min_predictions=5)
+                if perf:
+                    self.log_queue.put(
+                        f"\nHistory: {perf['correct']}/{perf['total']} correct "
+                        f"({perf['accuracy']:.1%})",
+                        'success' if perf['accuracy'] >= 0.55 else 'warning',
+                    )
+                    if perf['recent_10'] is not None:
+                        self.log_queue.put(f"  Last 10: {perf['recent_10']:.1%}", 'info')
+                    if perf['recent_20'] is not None:
+                        self.log_queue.put(f"  Last 20: {perf['recent_20']:.1%}", 'info')
+                    if perf['by_confidence']:
+                        self.log_queue.put("  By confidence:", 'info')
+                        for level, stats in perf['by_confidence'].items():
+                            self.log_queue.put(
+                                f"    {level:<12} {stats['accuracy']:.1%}  (n={int(stats['n'])})",
+                                'info',
+                            )
+                    self.data_manager.detect_model_drift()
+
                 self.log_queue.put("Loading combined data with live ASX200...", 'info')
                 combined = self.data_manager.prepare_combined_data_for_prediction()
                 
@@ -257,6 +278,10 @@ class MainViewModel:
                         )
                     
                     # ── Step 3: save prediction to history CSV
+                    model_ver = self.data_manager.get_model_version()
+                    market_reg = self.data_manager.classify_market_regime()
+                    self.log_queue.put(f"Market regime: {market_reg}  |  Model version: {model_ver}", 'info')
+
                     self.data_manager.save_prediction_to_history(
                         prediction_date=prediction_date_str,
                         base_date=latest_date_str,
@@ -264,8 +289,17 @@ class MainViewModel:
                         probability=prob,
                         predicted_up=predicted_up,
                         signal=dec,
+                        confidence_level=decision['confidence_level'],
                         feature_details=feature_details,
+                        model_version=model_ver,
+                        market_regime=market_reg,
                     )
+
+                    # ── Step 4: save daily performance snapshot
+                    try:
+                        self.data_manager.save_performance_snapshot()
+                    except Exception as e:
+                        self.log_queue.put(f"Could not save performance snapshot: {e}", 'warning')
                 else:
                     self.log_queue.put("Prediction failed.", 'error')
                     
@@ -281,3 +315,32 @@ class MainViewModel:
         thread = threading.Thread(target=worker)
         thread.daemon = True
         thread.start()
+
+    # ========== Performance Dashboard ==========
+
+    def get_performance_data(self) -> dict:
+        """Gather all performance analytics for the Performance tab.
+
+        Returns dict with keys:
+            perf       – dict from get_prediction_performance() or None
+            thresholds – DataFrame from analyze_thresholds() or None
+            drift      – bool
+        """
+        perf = self.data_manager.get_prediction_performance(min_predictions=5)
+        thresholds = None
+        drift = False
+        perf_log = None
+        if perf:
+            try:
+                thresholds = self.data_manager.analyze_thresholds()
+            except Exception:
+                thresholds = None
+            try:
+                drift = self.data_manager.detect_model_drift()
+            except Exception:
+                drift = False
+        try:
+            perf_log = self.data_manager.get_performance_log()
+        except Exception:
+            perf_log = None
+        return {"perf": perf, "thresholds": thresholds, "drift": drift, "perf_log": perf_log}

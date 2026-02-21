@@ -6,6 +6,7 @@ import os
 import tkinter as tk
 from tkinter import ttk
 from views.log_panel import LogPanel
+from views.performance_panel import PerformancePanel
 from views.file_viewer import FileViewer  # New import
 from viewmodels.main_viewmodel import MainViewModel
 
@@ -139,15 +140,28 @@ class MainWindow:
         # Separator
         ttk.Separator(self.root, orient='horizontal').pack(fill=tk.X, padx=10, pady=5)
         
-        # Bottom frame for log
+        # Bottom frame with tabbed notebook (Log + Performance)
         bottom_frame = ttk.Frame(self.root, padding="10")
         bottom_frame.pack(fill=tk.BOTH, expand=True)
         
-        ttk.Label(bottom_frame, text="Log", font=('Arial', 12, 'bold')).pack(anchor='w')
+        self.notebook = ttk.Notebook(bottom_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
         
-        # Log panel
-        self.log_panel = LogPanel(bottom_frame)
+        # Log tab
+        log_tab = ttk.Frame(self.notebook)
+        self.notebook.add(log_tab, text='  Log  ')
+        self.log_panel = LogPanel(log_tab)
         self.log_panel.pack(fill=tk.BOTH, expand=True)
+        
+        # Performance tab
+        perf_tab = ttk.Frame(self.notebook)
+        self.notebook.add(perf_tab, text='  Performance  ')
+        self.perf_panel = PerformancePanel(perf_tab)
+        self.perf_panel.pack(fill=tk.BOTH, expand=True)
+        self.perf_panel.set_refresh_callback(self._refresh_performance)
+        
+        # Auto-refresh performance data when switching to the Performance tab
+        self.notebook.bind('<<NotebookTabChanged>>', self._on_tab_changed)
     
     def _get_countdown_string(self):
         """Create a dynamic countdown string for the label"""
@@ -209,6 +223,37 @@ class MainWindow:
             FileViewer(self.root, file_path, "Model Information")
         else:
             self.log_panel.log(f"⚠ Model file not found: {file_path}", 'warning')
+    
+    def _refresh_performance(self):
+        """Fetch performance data from ViewModel and render on Performance tab."""
+        import threading
+
+        self.perf_panel.status_label.config(text="Loading…")
+        self.perf_panel.refresh_btn.config(state=tk.DISABLED)
+
+        def worker():
+            data = self.viewmodel.get_performance_data()
+            # Schedule UI update on main thread
+            self.root.after(0, lambda: self._render_performance(data))
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+    def _render_performance(self, data: dict):
+        """Render fetched performance data (called on main thread)."""
+        self.perf_panel.render(
+            perf=data.get('perf'),
+            thresholds=data.get('thresholds'),
+            drift=data.get('drift', False),
+            perf_log=data.get('perf_log'),
+        )
+        self.perf_panel.refresh_btn.config(state=tk.NORMAL)
+    
+    def _on_tab_changed(self, event):
+        """Auto-refresh performance data when switching to the Performance tab."""
+        selected = self.notebook.index(self.notebook.select())
+        if selected == 1:  # Performance tab index
+            self._refresh_performance()
     
     def update_ui(self):
         """Update UI based on ViewModel state (called when state changes)"""
