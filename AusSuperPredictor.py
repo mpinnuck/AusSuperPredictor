@@ -10,6 +10,7 @@ Usage:
 
 Build
 cd /Users/markpinnuck/Dev/GitHub/AusSuperPredictor
+source .venv/bin/activate
 .venv/bin/pyinstaller AusSuperPredictor.spec --noconfirm  --clean --log-level=ERROR
 cp -R dist/AusSuperPredictor.app /Applications/
 """
