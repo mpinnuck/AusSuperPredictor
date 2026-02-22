@@ -405,6 +405,137 @@ class MainViewModel:
         thread.daemon = True
         thread.start()
 
+    # ========== Headless CLI Methods ==========
+
+    def run_train(self) -> bool:
+        """Run update + train synchronously (for CLI / cron). Returns True on success."""
+        try:
+            self.log_queue.put("Starting data update...", 'info')
+            result = self.data_manager.update_local_data()
+            if result["success"]:
+                self.log_queue.put(f"Data update completed. {result['message']}", 'success')
+                self._refresh_last_date()
+            else:
+                self.log_queue.put(f"Error updating data: {result['message']}", 'error')
+                return False
+
+            # Load previous snapshot for comparison
+            prev = self.model_manager.load_training_snapshot()
+
+            self.log_queue.put("Loading combined data...", 'info')
+            combined = self.data_manager.prepare_combined_data()
+            if combined.empty:
+                self.log_queue.put("No data available.", 'error')
+                return False
+
+            self.log_queue.put("Engineering features...", 'info')
+            combined = self.model_manager.engineer_features(combined)
+            if combined.empty:
+                self.log_queue.put("No valid features.", 'error')
+                return False
+
+            self.log_queue.put("Training model...", 'info')
+            result = self.model_manager.train(combined)
+            if not result["success"]:
+                self.log_queue.put(f"Error: {result['message']}", 'error')
+                return False
+
+            self.log_queue.put(f"Train accuracy: {result['train_accuracy']:.3f}", 'info')
+            self.log_queue.put(f"Test accuracy:  {result['test_accuracy']:.3f}", 'info')
+            for feat in result["feature_importance"][:5]:
+                self.log_queue.put(f"  {feat['feature']}: {feat['importance']:.4f}", 'info')
+            cal = result.get('calibration')
+            if cal:
+                self.log_queue.put(
+                    f"ECE: {cal['expected_calibration_error']:.4f}  "
+                    f"MCE: {cal['max_calibration_error']:.4f}", 'info')
+            if prev:
+                d_test = result['test_accuracy'] - prev.get('test_accuracy', 0)
+                self.log_queue.put(f"Test acc delta: {d_test:+.3f}", 'info')
+            return True
+        except Exception as e:
+            self.log_queue.put(f"Error: {e}", 'error')
+            return False
+
+    def run_predict(self) -> bool:
+        """Run update + predict synchronously (for CLI / cron). Returns True on success."""
+        try:
+            self.log_queue.put("Starting data update...", 'info')
+            result = self.data_manager.update_local_data()
+            if result["success"]:
+                self.log_queue.put(f"Data update completed. {result['message']}", 'success')
+                self._refresh_last_date()
+            else:
+                self.log_queue.put(f"Error updating data: {result['message']}", 'error')
+                return False
+
+            # Back-fill previous predictions
+            updated = self.data_manager.update_prediction_history()
+            if updated:
+                self.log_queue.put(f"Back-filled {updated} previous prediction(s)", 'info')
+
+            self.log_queue.put("Loading combined data with live ASX200...", 'info')
+            combined = self.data_manager.prepare_combined_data_for_prediction()
+            if combined.empty:
+                self.log_queue.put("No data available.", 'error')
+                return False
+
+            combined = self.model_manager.engineer_features(combined, for_prediction=True)
+            if combined.empty:
+                self.log_queue.put("No valid features.", 'error')
+                return False
+
+            if not self.model_manager.load_model():
+                self.log_queue.put("No trained model. Train first.", 'error')
+                return False
+
+            decision = self.model_manager.get_decision(combined, threshold=0.6)
+            if decision['probability'] is None:
+                self.log_queue.put("Prediction failed.", 'error')
+                return False
+
+            prob = decision['probability']
+            latest_date = combined.index[-1]
+            latest_price = combined['price'].iloc[-1]
+
+            from datetime import timedelta
+            next_day = latest_date + timedelta(days=1)
+            while next_day.weekday() >= 5:
+                next_day += timedelta(days=1)
+
+            predicted_up = 1 if prob > 0.5 else 0
+            self.log_queue.put(f"ASX200: {latest_price:,.2f} ({latest_date.strftime('%Y-%m-%d')})", 'info')
+            self.log_queue.put(f"Prediction for {next_day.strftime('%Y-%m-%d')}: "
+                               f"P(up)={prob*100:.1f}%  {decision['decision']}", 'info')
+            self.log_queue.put(f"Confidence: {decision['confidence_level']}", 'info')
+
+            model_ver = self.data_manager.get_model_version()
+            market_reg = self.data_manager.classify_market_regime()
+            self.log_queue.put(f"Regime: {market_reg}  Model: {model_ver}", 'info')
+
+            self.data_manager.save_prediction_to_history(
+                prediction_date=next_day.strftime('%Y-%m-%d'),
+                base_date=latest_date.strftime('%Y-%m-%d'),
+                base_price=latest_price,
+                probability=prob,
+                predicted_up=predicted_up,
+                signal=decision['decision'],
+                confidence_level=decision['confidence_level'],
+                feature_details=decision['feature_details'],
+                model_version=model_ver,
+                market_regime=market_reg,
+            )
+
+            try:
+                self.data_manager.save_performance_snapshot()
+            except Exception as e:
+                self.log_queue.put(f"Could not save performance snapshot: {e}", 'warning')
+
+            return True
+        except Exception as e:
+            self.log_queue.put(f"Error: {e}", 'error')
+            return False
+
     # ========== Performance Dashboard ==========
 
     def get_performance_data(self) -> dict:

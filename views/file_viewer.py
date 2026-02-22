@@ -1,5 +1,6 @@
 """
 File Viewer - popup window for viewing CSV and PKL files
+Now includes tree visualization for Random Forest models.
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext
@@ -10,6 +11,17 @@ import joblib
 import os
 from datetime import datetime
 
+# For tree visualization
+try:
+    import matplotlib
+    matplotlib.use('TkAgg')  # Use Tkinter backend
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    from matplotlib.figure import Figure
+    from sklearn.tree import plot_tree
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
 class FileViewer:
     """Popup window for viewing file contents"""
     
@@ -17,6 +29,7 @@ class FileViewer:
         self.parent = parent
         self.file_path = file_path
         self.file_name = os.path.basename(file_path)
+        self.feature_names = None  # Will hold feature names if available
         
         # Create popup window
         self.window = tk.Toplevel(parent)
@@ -90,6 +103,9 @@ class FileViewer:
             font=('Courier', 10)
         )
         self.metadata_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Tree tab (will be added only if model and matplotlib available)
+        self.tree_vis_frame = None
     
     def _create_treeview(self):
         """Create treeview for tabular data"""
@@ -273,6 +289,15 @@ class FileViewer:
             
             file_size = os.path.getsize(self.file_path) / 1024  # KB
             
+            # Try to load feature names if available
+            feature_names_path = os.path.join(
+                os.path.dirname(self.file_path),
+                'feature_names.txt'
+            )
+            if os.path.exists(feature_names_path):
+                with open(feature_names_path, 'r') as f:
+                    self.feature_names = [line.strip().split('. ')[-1] for line in f.readlines()]
+            
             # Handle different types of data
             if hasattr(data, 'feature_importances_'):
                 # It's a model
@@ -311,19 +336,10 @@ Parameters:
         if hasattr(model, 'feature_importances_'):
             self.summary_text.insert('end', "\n=== Feature Importances ===\n\n")
             
-            # Try to load feature names from separate file
-            feature_names_path = os.path.join(
-                os.path.dirname(self.file_path),
-                'feature_names.txt'
-            )
-            
-            if os.path.exists(feature_names_path):
-                with open(feature_names_path, 'r') as f:
-                    feature_names = [line.strip().split('. ')[-1] for line in f.readlines()]
-                
+            if self.feature_names and len(self.feature_names) == len(model.feature_importances_):
                 # Create importance dataframe
                 importance_df = pd.DataFrame({
-                    'Feature': feature_names[:len(model.feature_importances_)],
+                    'Feature': self.feature_names,
                     'Importance': model.feature_importances_.round(4)
                 }).sort_values('Importance', ascending=False)
                 
@@ -333,6 +349,69 @@ Parameters:
                 importances = model.feature_importances_.round(4)
                 for i, imp in enumerate(importances[:20]):
                     self.summary_text.insert('end', f"Feature {i+1}: {imp:.4f}\n")
+        
+        # Add tree visualization tab if matplotlib is available
+        if MATPLOTLIB_AVAILABLE:
+            self._add_tree_tab(model)
+        else:
+            self.summary_text.insert('end', "\n\n⚠ Install matplotlib to see tree visualization.")
+    
+    def _add_tree_tab(self, model):
+        """Create a new tab with a plot of a decision tree from the forest."""
+        self.tree_vis_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.tree_vis_frame, text="Tree")
+        
+        # Control bar
+        ctrl_frame = ttk.Frame(self.tree_vis_frame)
+        ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Label(ctrl_frame, text="Tree index:").pack(side=tk.LEFT)
+        tree_var = tk.IntVar(value=0)
+        tree_spin = ttk.Spinbox(
+            ctrl_frame, from_=0, to=len(model.estimators_) - 1,
+            textvariable=tree_var, width=5
+        )
+        tree_spin.pack(side=tk.LEFT, padx=5)
+        ttk.Label(ctrl_frame, text=f"of {len(model.estimators_)}").pack(side=tk.LEFT)
+        
+        depth_label = ttk.Label(ctrl_frame, text="Max depth shown:")
+        depth_label.pack(side=tk.LEFT, padx=(15, 0))
+        depth_var = tk.IntVar(value=3)
+        depth_spin = ttk.Spinbox(
+            ctrl_frame, from_=1, to=model.max_depth or 20,
+            textvariable=depth_var, width=5
+        )
+        depth_spin.pack(side=tk.LEFT, padx=5)
+        
+        # Canvas for plot
+        fig = Figure(figsize=(12, 7), dpi=90)
+        canvas = FigureCanvasTkAgg(fig, master=self.tree_vis_frame)
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        def update_tree(*_args):
+            idx = tree_var.get()
+            max_d = depth_var.get()
+            fig.clear()
+            ax = fig.add_subplot(111)
+            plot_tree(
+                model.estimators_[idx],
+                feature_names=self.feature_names if self.feature_names else None,
+                class_names=['Down', 'Up'],
+                filled=True,
+                rounded=True,
+                max_depth=max_d,
+                fontsize=7,
+                ax=ax
+            )
+            ax.set_title(f"Tree {idx} (showing depth {max_d})", fontsize=10)
+            fig.tight_layout()
+            canvas.draw()
+        
+        update_tree()  # initial plot
+        
+        # Redraw when either spinner changes
+        tree_var.trace_add('write', update_tree)
+        depth_var.trace_add('write', update_tree)
     
     def _display_feature_list(self, feature_list, file_size):
         """Display feature list"""
