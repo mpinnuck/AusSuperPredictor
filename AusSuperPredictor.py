@@ -10,7 +10,8 @@ Usage:
 
 Build
 cd /Users/markpinnuck/Dev/GitHub/AusSuperPredictor
-.venv/bin/pyinstaller --onedir --windowed --name "AusSuperPredictor" AusSuperPredictor.py
+.venv/bin/pyinstaller AusSuperPredictor.spec --noconfirm  --clean --log-level=ERROR
+cp -R dist/AusSuperPredictor.app /Applications/
 """
 import sys
 import os
@@ -23,7 +24,7 @@ from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 
 # Application version
-VERSION = "1.9.0"
+VERSION = "2.0.0"
 
 APP_NAME = "AusSuperPredictor"
 
