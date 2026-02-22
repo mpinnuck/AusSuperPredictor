@@ -7,7 +7,6 @@ import tkinter as tk
 from tkinter import ttk
 from views.log_panel import LogPanel
 from views.performance_panel import PerformancePanel
-from views.file_viewer import FileViewer  # New import
 from viewmodels.main_viewmodel import MainViewModel
 
 class MainWindow:
@@ -247,6 +246,7 @@ class MainWindow:
     
     def _on_view_data_clicked(self):
         """Handle View Data button click"""
+        from views.file_viewer import FileViewer
         file_path = self.viewmodel.config['data']['local_csv_path']
         if os.path.exists(file_path):
             FileViewer(self.root, file_path, "AustralianSuper Data")
@@ -255,6 +255,7 @@ class MainWindow:
     
     def _on_view_model_clicked(self):
         """Handle View Model button click"""
+        from views.file_viewer import FileViewer
         file_path = self.viewmodel.config['model']['save_path']
         if os.path.exists(file_path):
             FileViewer(self.root, file_path, "Model Information")

@@ -8,19 +8,13 @@ from tkinter import font as tkfont
 import pandas as pd
 import numpy as np
 import joblib
+import threading
 import os
 from datetime import datetime
 
-# For tree visualization
-try:
-    import matplotlib
-    matplotlib.use('TkAgg')  # Use Tkinter backend
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    from matplotlib.figure import Figure
-    from sklearn.tree import plot_tree
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
+# matplotlib / sklearn are imported lazily in _add_tree_tab() to avoid
+# the 30-second font-cache build that would otherwise delay app startup.
+MATLIB_IMPORTS = {}  # filled on first use
 
 class FileViewer:
     """Popup window for viewing file contents"""
@@ -350,21 +344,70 @@ Parameters:
                 for i, imp in enumerate(importances[:20]):
                     self.summary_text.insert('end', f"Feature {i+1}: {imp:.4f}\n")
         
-        # Add tree visualization tab if matplotlib is available
-        if MATPLOTLIB_AVAILABLE:
+        # Add tree visualization tab (matplotlib loaded lazily on first use)
+        try:
             self._add_tree_tab(model)
-        else:
+        except ImportError:
             self.summary_text.insert('end', "\n\n⚠ Install matplotlib to see tree visualization.")
     
     def _add_tree_tab(self, model):
         """Create a new tab with a plot of a decision tree from the forest."""
         self.tree_vis_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.tree_vis_frame, text="Tree")
-        
+
+        # Show a "please wait" message while matplotlib loads in background
+        wait_frame = ttk.Frame(self.tree_vis_frame)
+        wait_frame.place(relx=0.5, rely=0.5, anchor='center')
+        ttk.Label(
+            wait_frame, text="⏳ Loading tree visualisation…",
+            font=('Helvetica', 14)
+        ).pack()
+        wait_detail = ttk.Label(
+            wait_frame, text="(first load builds font cache – may take ~30 s)",
+            font=('Helvetica', 10)
+        )
+        wait_detail.pack(pady=(4, 0))
+
+        def _do_load():
+            """Background thread: import matplotlib & sklearn."""
+            try:
+                if not MATLIB_IMPORTS:
+                    import matplotlib
+                    matplotlib.use('TkAgg')
+                    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+                    from matplotlib.figure import Figure
+                    from sklearn.tree import plot_tree
+                    MATLIB_IMPORTS['FigureCanvasTkAgg'] = FigureCanvasTkAgg
+                    MATLIB_IMPORTS['Figure'] = Figure
+                    MATLIB_IMPORTS['plot_tree'] = plot_tree
+                # Schedule UI build on the main thread
+                self.window.after(0, lambda: self._build_tree_ui(model, wait_frame))
+            except Exception as exc:
+                self.window.after(0, lambda: self._tree_load_failed(wait_frame, exc))
+
+        threading.Thread(target=_do_load, daemon=True).start()
+
+    def _tree_load_failed(self, wait_frame, exc):
+        """Called on main thread if matplotlib import fails."""
+        for w in wait_frame.winfo_children():
+            w.destroy()
+        ttk.Label(
+            wait_frame, text=f"⚠ Failed to load tree view: {exc}",
+            font=('Helvetica', 11)
+        ).pack()
+
+    def _build_tree_ui(self, model, wait_frame):
+        """Build the tree controls & canvas (called on main thread after imports ready)."""
+        wait_frame.destroy()
+
+        FigureCanvasTkAgg = MATLIB_IMPORTS['FigureCanvasTkAgg']
+        Figure = MATLIB_IMPORTS['Figure']
+        _plot_tree = MATLIB_IMPORTS['plot_tree']
+
         # Control bar
         ctrl_frame = ttk.Frame(self.tree_vis_frame)
         ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
-        
+
         ttk.Label(ctrl_frame, text="Tree index:").pack(side=tk.LEFT)
         tree_var = tk.IntVar(value=0)
         tree_spin = ttk.Spinbox(
@@ -373,7 +416,7 @@ Parameters:
         )
         tree_spin.pack(side=tk.LEFT, padx=5)
         ttk.Label(ctrl_frame, text=f"of {len(model.estimators_)}").pack(side=tk.LEFT)
-        
+
         depth_label = ttk.Label(ctrl_frame, text="Max depth shown:")
         depth_label.pack(side=tk.LEFT, padx=(15, 0))
         depth_var = tk.IntVar(value=3)
@@ -382,18 +425,18 @@ Parameters:
             textvariable=depth_var, width=5
         )
         depth_spin.pack(side=tk.LEFT, padx=5)
-        
+
         # Canvas for plot
         fig = Figure(figsize=(12, 7), dpi=90)
         canvas = FigureCanvasTkAgg(fig, master=self.tree_vis_frame)
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
+
         def update_tree(*_args):
             idx = tree_var.get()
             max_d = depth_var.get()
             fig.clear()
             ax = fig.add_subplot(111)
-            plot_tree(
+            _plot_tree(
                 model.estimators_[idx],
                 feature_names=self.feature_names if self.feature_names else None,
                 class_names=['Down', 'Up'],
@@ -406,9 +449,9 @@ Parameters:
             ax.set_title(f"Tree {idx} (showing depth {max_d})", fontsize=10)
             fig.tight_layout()
             canvas.draw()
-        
+
         update_tree()  # initial plot
-        
+
         # Redraw when either spinner changes
         tree_var.trace_add('write', update_tree)
         depth_var.trace_add('write', update_tree)

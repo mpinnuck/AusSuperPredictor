@@ -23,7 +23,7 @@ from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 
 # Application version
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 
 APP_NAME = "AusSuperPredictor"
 
