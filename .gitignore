@@ -30,6 +30,10 @@ Thumbs.db
 data/australian_super_daily.csv
 data/model.pkl
 data/features.pkl
+data/asx200history.csv
+data/performance_log.csv
+data/last_training.json
+data/feature_names.txt
 
 # Logs
 *.log

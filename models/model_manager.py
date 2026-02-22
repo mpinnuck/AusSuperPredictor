@@ -152,7 +152,8 @@ class ModelManager:
     
     def save_feature_names(self, feature_names: List[str]) -> None:
         """Save feature names separately for better model viewing"""
-        feature_names_path = self.features_path.replace('features.pkl', 'feature_names.txt')
+        base_dir = os.path.dirname(self.features_path)
+        feature_names_path = os.path.join(base_dir, "feature_names.txt")
         try:
             with open(feature_names_path, 'w') as f:
                 for i, name in enumerate(feature_names, 1):

@@ -28,6 +28,10 @@ class MainViewModel:
         self.is_predicting = False
         self.auto_run_enabled = False
         self.last_auto_run_date = None
+        self.auto_run_hour, self.auto_run_minute = self._parse_time(
+            config.get('schedule', {}).get('auto_run_time', '15:30'))
+        self.market_close_hour, self.market_close_minute = self._parse_time(
+            config.get('schedule', {}).get('market_close_time', '16:00'))
         
         # Callbacks (set by View)
         self.on_state_changed = None
@@ -35,6 +39,35 @@ class MainViewModel:
         
         # Initialize
         self._refresh_last_date()
+    
+    @staticmethod
+    def _parse_time(time_str: str) -> tuple:
+        """Parse a time string like '15:30' or '3:30pm' into (hour, minute)."""
+        time_str = time_str.strip().lower()
+        is_pm = time_str.endswith('pm')
+        is_am = time_str.endswith('am')
+        if is_pm or is_am:
+            time_str = time_str[:-2].strip()
+        parts = time_str.split(':')
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        if is_pm and hour != 12:
+            hour += 12
+        elif is_am and hour == 12:
+            hour = 0
+        return hour, minute
+    
+    def save_schedule(self):
+        """Persist current schedule times to config.json."""
+        import json
+        self.config.setdefault('schedule', {})
+        self.config['schedule']['auto_run_time'] = f"{self.auto_run_hour:02d}:{self.auto_run_minute:02d}"
+        self.config['schedule']['market_close_time'] = f"{self.market_close_hour:02d}:{self.market_close_minute:02d}"
+        try:
+            with open('config.json', 'w') as f:
+                json.dump(self.config, f, indent=4)
+        except Exception as e:
+            self.log_queue.put(f"⚠ Could not save schedule: {e}", 'warning')
     
     def _refresh_last_date(self):
         """Refresh last data date from storage"""
@@ -45,7 +78,7 @@ class MainViewModel:
     
     def update_countdown(self):
         """Update countdown string"""
-        h, m, s = self.time_utils.get_countdown_to(16, 0)
+        h, m, s = self.time_utils.get_countdown_to(self.market_close_hour, self.market_close_minute)
         self.countdown = f"{h:02d}:{m:02d}:{s:02d}"
         if self.on_state_changed:
             self.on_state_changed()
@@ -55,7 +88,7 @@ class MainViewModel:
         if not self.auto_run_enabled:
             return False
         
-        if self.time_utils.is_auto_run_time(15, 30):
+        if self.time_utils.is_auto_run_time(self.auto_run_hour, self.auto_run_minute):
             today = datetime.now().date()
             if self.last_auto_run_date != today:
                 self.last_auto_run_date = today

@@ -103,14 +103,34 @@ class MainWindow:
         )
         self.view_model_btn.grid(row=4, column=2, padx=5, pady=5)
         
-        # Auto-run checkbox
+        # Auto-run checkbox and time editors
+        schedule_frame = ttk.Frame(top_frame)
+        schedule_frame.grid(row=5, column=0, columnspan=3, sticky='w', pady=5)
+        
         self.auto_var = tk.BooleanVar(value=self.viewmodel.auto_run_enabled)
         ttk.Checkbutton(
-            top_frame, 
-            text="Enable auto-run at 15:30 Sydney time",
+            schedule_frame, 
+            text="Auto-run at",
             variable=self.auto_var,
             command=self._on_auto_run_toggle
-        ).grid(row=5, column=0, columnspan=3, sticky='w', pady=5)
+        ).pack(side=tk.LEFT)
+        
+        self.auto_run_time_var = tk.StringVar(
+            value=f"{self.viewmodel.auto_run_hour:02d}:{self.viewmodel.auto_run_minute:02d}")
+        auto_run_entry = ttk.Entry(schedule_frame, textvariable=self.auto_run_time_var, width=6)
+        auto_run_entry.pack(side=tk.LEFT, padx=(2, 8))
+        auto_run_entry.bind('<FocusOut>', lambda e: self._on_schedule_changed())
+        auto_run_entry.bind('<Return>', lambda e: self._on_schedule_changed())
+        
+        ttk.Label(schedule_frame, text="Market close:").pack(side=tk.LEFT)
+        self.market_close_time_var = tk.StringVar(
+            value=f"{self.viewmodel.market_close_hour:02d}:{self.viewmodel.market_close_minute:02d}")
+        close_entry = ttk.Entry(schedule_frame, textvariable=self.market_close_time_var, width=6)
+        close_entry.pack(side=tk.LEFT, padx=(2, 8))
+        close_entry.bind('<FocusOut>', lambda e: self._on_schedule_changed())
+        close_entry.bind('<Return>', lambda e: self._on_schedule_changed())
+        
+        ttk.Label(schedule_frame, text="(Sydney time)").pack(side=tk.LEFT)
         
         # Buttons
         button_frame = ttk.Frame(top_frame)
@@ -195,6 +215,23 @@ class MainWindow:
     def _on_auto_run_toggle(self):
         """Handle auto-run checkbox toggle"""
         self.viewmodel.auto_run_enabled = self.auto_var.get()
+    
+    def _on_schedule_changed(self):
+        """Parse time entries and persist to config.json"""
+        try:
+            ar_h, ar_m = self.viewmodel._parse_time(self.auto_run_time_var.get())
+            mc_h, mc_m = self.viewmodel._parse_time(self.market_close_time_var.get())
+            self.viewmodel.auto_run_hour = ar_h
+            self.viewmodel.auto_run_minute = ar_m
+            self.viewmodel.market_close_hour = mc_h
+            self.viewmodel.market_close_minute = mc_m
+            # Normalise display
+            self.auto_run_time_var.set(f"{ar_h:02d}:{ar_m:02d}")
+            self.market_close_time_var.set(f"{mc_h:02d}:{mc_m:02d}")
+            # Persist to config.json
+            self.viewmodel.save_schedule()
+        except (ValueError, IndexError):
+            pass  # ignore invalid input until user fixes it
     
     def _on_update_clicked(self):
         """Handle Update Data button click"""
