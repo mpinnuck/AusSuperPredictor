@@ -28,13 +28,15 @@ import os
 import shutil
 import argparse
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import tkinter as tk
 from views.main_window import MainWindow
 from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 
 # Application version
-VERSION = "2.2.0"
+VERSION = "3.0.0"
 
 APP_NAME = "AusSuperPredictor"
 
@@ -109,6 +111,35 @@ def _get_app_data_dir() -> str:
 
 # Set working directory to the appropriate data location
 os.chdir(_get_app_data_dir())
+
+
+def _setup_logging():
+    """Configure a rotating file logger in the app data directory.
+
+    Creates a ``logs/`` folder and writes ``app.log`` with a
+    RotatingFileHandler (max 1 MB, 1 backup → ``app.log.1``).
+    """
+    log_dir = os.path.join(
+        os.path.expanduser('~'), 'Library', 'Application Support',
+        APP_NAME, 'logs',
+    )
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, 'app.log')
+
+    handler = RotatingFileHandler(
+        log_path, maxBytes=1_000_000, backupCount=1, encoding='utf-8',
+    )
+    handler.setFormatter(logging.Formatter(
+        '%(asctime)s  %(levelname)-7s  %(name)s  %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S',
+    ))
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(handler)
+    logging.info('AusSuperPredictor v%s started  (pid=%s)', VERSION, os.getpid())
+
+
+_setup_logging()
 
 
 def _resolve_data_paths(config):
