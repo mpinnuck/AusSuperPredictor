@@ -14,13 +14,37 @@ from utils.time_utils import SydneyTimeUtils
 class DataManager:
     """Manages all data operations - AustralianSuper and market data"""
     
+    # Default market sources (used when config omits the key)
+    _DEFAULT_MARKET_SOURCES = [
+        {'name': 'asx_futures',    'ticker': '8824',     'source': 'investing', 'shift': False},
+        {'name': 'sp500_futures',  'ticker': 'ES=F',      'shift': False},
+        {'name': 'vix',            'ticker': '^VIX',      'shift': True},
+        {'name': 'asx_vix',        'ticker': '^AXVI',     'shift': True},
+        {'name': 'gold',           'ticker': 'GC=F',      'shift': True},
+        {'name': 'copper',         'ticker': 'HG=F',      'shift': True},
+        {'name': 'oil',            'ticker': 'CL=F',      'shift': True},
+        {'name': 'iron_ore_proxy', 'ticker': 'BHP.AX',    'shift': False},
+        {'name': 'audusd',         'ticker': 'AUDUSD=X',  'shift': False},
+    ]
+
     def __init__(self, config: Dict[str, Any], log_queue=None):
         self.config = config
         self.local_csv_path = config['data']['local_csv_path']
         self.start_date = datetime.strptime(config['data']['start_date'], '%d/%m/%Y')
         self.time_utils = SydneyTimeUtils()
         self.log_queue = log_queue
-        
+
+        # Market data source table – read from config, fall back to defaults
+        self.MARKET_SOURCES = config.get('market_sources',
+                                         self._DEFAULT_MARKET_SOURCES)
+        self._SHIFT_COLS = tuple(s['name'] for s in self.MARKET_SOURCES
+                                 if s['shift'])
+
+        # Derive history / performance log paths from data_folder
+        data_folder = config.get('data_folder', 'data')
+        self.HISTORY_PATH = os.path.join(data_folder, 'asx200history.csv')
+        self.PERF_LOG_PATH = os.path.join(data_folder, 'performance_log.csv')
+
         # Ensure data directory exists
         self._ensure_data_directory()
     
@@ -232,170 +256,141 @@ class DataManager:
                 # Use first column (index 0) as date index
                 return pd.read_csv(self.local_csv_path, parse_dates=[0], index_col=0)
         return pd.DataFrame()
-    
+
+    # ── Investing.com helper ─────────────────────────────────────────
+
+    def _fetch_investing_series(
+        self, pair_id: int, start_date: date, end_date: date,
+    ) -> Optional[pd.Series]:
+        """Fetch daily close prices from the Investing.com historical API.
+
+        Returns a datetime-indexed Series of close prices, or None on failure.
+        """
+        import requests as req
+
+        headers = {
+            'User-Agent': ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                           'AppleWebKit/537.36'),
+            'domain-id': 'au',
+        }
+        start_str = start_date.strftime('%Y-%m-%d') if isinstance(start_date, date) else str(start_date)
+        end_str = end_date.strftime('%Y-%m-%d') if isinstance(end_date, date) else str(end_date)
+        url = (
+            f"https://api.investing.com/api/financialdata/historical/{pair_id}"
+            f"?start-date={start_str}&end-date={end_str}"
+            f"&time-frame=Daily&add-missing-rows=false"
+        )
+
+        try:
+            resp = req.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            records = resp.json().get('data', [])
+            if not records:
+                return None
+            dates = [pd.Timestamp(r['rowDateTimestamp']) for r in records]
+            closes = [float(r['last_closeRaw']) for r in records]
+            series = pd.Series(
+                closes,
+                index=pd.DatetimeIndex(dates).normalize().tz_localize(None),
+            )
+            series = series[~series.index.duplicated(keep='first')]
+            series.sort_index(inplace=True)
+            return series
+        except Exception as e:
+            self._log(f"⚠ Investing.com fetch failed (pair {pair_id}): {e}", 'warning')
+            return None
+
     def get_market_data(self, end_date: date) -> pd.DataFrame:
-        """Fetch market data (futures, commodities, etc.) up to end_date"""
+        """Fetch market data for all sources in MARKET_SOURCES."""
         if isinstance(end_date, date):
             end_date = datetime.combine(end_date, datetime.min.time())
-        
-        market_data = {}
-        
-        # ASX200 futures
-        try:
-            asx_fut = yf.download('AP', start=self.start_date, end=end_date, progress=False)
-            if not asx_fut.empty and 'Close' in asx_fut.columns:
-                market_data['asx_futures'] = asx_fut['Close']
-        except:
-            pass
-        
-        # SP500 futures
-        try:
-            sp_fut = yf.download('ES=F', start=self.start_date, end=end_date, progress=False)
-            if not sp_fut.empty and 'Close' in sp_fut.columns:
-                market_data['sp500_futures'] = sp_fut['Close']
-        except:
-            pass
-        
-        # VIX
-        try:
-            vix = yf.download('^VIX', start=self.start_date, end=end_date, progress=False)
-            if not vix.empty and 'Close' in vix.columns:
-                market_data['vix'] = vix['Close']
-        except:
-            pass
-        
-        # Commodities
-        commodities = {}
-        try:
-            gold = yf.download('GC=F', start=self.start_date, end=end_date, progress=False)
-            if not gold.empty and 'Close' in gold.columns:
-                commodities['gold'] = gold['Close']
-        except:
-            pass
-        try:
-            copper = yf.download('HG=F', start=self.start_date, end=end_date, progress=False)
-            if not copper.empty and 'Close' in copper.columns:
-                commodities['copper'] = copper['Close']
-        except:
-            pass
-        try:
-            oil = yf.download('CL=F', start=self.start_date, end=end_date, progress=False)
-            if not oil.empty and 'Close' in oil.columns:
-                commodities['oil'] = oil['Close']
-        except:
-            pass
-        try:
-            bhp = yf.download('BHP.AX', start=self.start_date, end=end_date, progress=False)
-            if not bhp.empty and 'Close' in bhp.columns:
-                commodities['iron_ore_proxy'] = bhp['Close']
-        except:
-            pass
-        
-        for name, series in commodities.items():
-            if hasattr(series, 'values') and len(series) > 0:
-                market_data[name] = series
-            else:
-                self._log(f"⚠ Skipping {name} - no valid data", 'warning')
-        
-        # AUD/USD
-        try:
-            audusd = yf.download('AUDUSD=X', start=self.start_date, end=end_date, progress=False)
-            if not audusd.empty and 'Close' in audusd.columns:
-                market_data['audusd'] = audusd['Close']
-        except Exception as e:
-            self._log(f"⚠ Failed to fetch AUDUSD: {e}", 'warning')
-        
-        # Combine all market data
-        if market_data:
+
+        # ── 1. Download each ticker ──────────────────────────────────
+        raw: Dict[str, pd.Series] = {}
+        for src in self.MARKET_SOURCES:
+            name, ticker = src['name'], src['ticker']
+            source = src.get('source', 'yfinance')
             try:
-                # Filter out empty or invalid series before creating DataFrame
-                valid_data = {}
-                for name, series in market_data.items():
-                    try:
-                        # Basic validation - check if it looks like a pandas Series
-                        if not hasattr(series, 'values'):
-                            self._log(f"⚠ Skipping {name} - not a series object", 'warning')
-                            continue
-                            
-                        if not hasattr(series, 'index'):
-                            self._log(f"⚠ Skipping {name} - no index", 'warning')
-                            continue
-                            
-                        # Check length
-                        series_len = len(series)
-                        if series_len == 0:
-                            self._log(f"⚠ Skipping {name} - empty series", 'warning')
-                            continue
-                        
-                        # Check for all NaN values (if applicable)
-                        has_valid_data = True
-                        if hasattr(series, 'isna'):
-                            try:
-                                all_nan = series.isna().all()
-                                if all_nan:
-                                    has_valid_data = False
-                                    self._log(f"⚠ Skipping {name} - all NaN values", 'warning')
-                                    continue
-                            except:
-                                # If isna() check fails, assume it has valid data
-                                pass
-                        
-                        if has_valid_data:
-                            valid_data[name] = series
-                            self._log(f"✓ Added {name}: {series_len} records", 'info')
-                            
-                    except Exception as e:
-                        self._log(f"⚠ Error validating {name}: {e}", 'warning')
-                
-                if valid_data:
-                    try:
-                        # Create DataFrame by explicitly converting each series to proper pandas Series
-                        self._log("Converting market data to proper pandas format...", 'info')
-                        clean_data = {}
-                        common_index = None
-                        
-                        for name, series in valid_data.items():
-                            try:
-                                # Convert to proper pandas Series with datetime index
-                                if hasattr(series, 'values') and hasattr(series, 'index'):
-                                    # Extract values and flatten them to 1D
-                                    values = series.values.flatten()  # This fixes the 2D array issue
-                                    index = pd.to_datetime(series.index)
-                                    clean_series = pd.Series(values, index=index, name=name)
-                                    clean_data[name] = clean_series
-                                    
-                                    # Track a common index for alignment
-                                    if common_index is None:
-                                        common_index = index
-                                    
-                                    self._log(f"✓ Converted {name}: {len(clean_series)} records", 'info')
-                                else:
-                                    self._log(f"⚠ Skipping {name}: invalid format", 'warning')
-                            except Exception as e:
-                                self._log(f"⚠ Failed to convert {name}: {e}", 'warning')
-                        
-                        if clean_data and common_index is not None:
-                            # Create DataFrame from clean Series objects
-                            df = pd.DataFrame(clean_data)
-                            self._log(f"✓ Market data loaded: {len(df)} records, {len(clean_data)} indicators", 'success')
-                            return df
-                        else:
-                            self._log("⚠ No valid clean market data", 'warning')
-                            
-                    except Exception as df_error:
-                        self._log(f"✗ DataFrame creation failed: {df_error}", 'error')
+                if source == 'investing':
+                    close = self._fetch_investing_series(
+                        pair_id=int(ticker),
+                        start_date=self.start_date.date()
+                            if isinstance(self.start_date, datetime)
+                            else self.start_date,
+                        end_date=end_date.date()
+                            if isinstance(end_date, datetime)
+                            else end_date,
+                    )
+                    if close is not None and not close.empty:
+                        raw[name] = close
+                    else:
+                        self._log(f"⚠ {name} (investing:{ticker}) returned empty data", 'warning')
                 else:
-                    self._log("⚠ No valid market data available", 'warning')
-                    
+                    data = yf.download(ticker, start=self.start_date,
+                                       end=end_date, progress=False)
+                    # Handle MultiIndex columns from yfinance
+                    if isinstance(data.columns, pd.MultiIndex):
+                        data.columns = data.columns.get_level_values(0)
+                    if not data.empty and 'Close' in data.columns:
+                        close = data['Close']
+                        # yfinance may return MultiIndex → squeeze to 1-D Series
+                        if isinstance(close, pd.DataFrame):
+                            close = close.squeeze(axis=1)
+                        raw[name] = close
+                    else:
+                        self._log(f"⚠ {name} ({ticker}) returned empty data", 'warning')
             except Exception as e:
-                self._log(f"✗ Error creating market data DataFrame: {e}", 'error')
-                
-        return pd.DataFrame()
-    
+                self._log(f"⚠ Failed to fetch {name} ({ticker}): {e}", 'warning')
+
+        if not raw:
+            return pd.DataFrame()
+
+        # ── 2. Validate & convert to clean 1-D Series ────────────────
+        clean_data: Dict[str, pd.Series] = {}
+        for name, series in raw.items():
+            try:
+                if len(series) == 0:
+                    self._log(f"⚠ Skipping {name} - empty series", 'warning')
+                    continue
+                if hasattr(series, 'isna') and series.isna().all():
+                    self._log(f"⚠ Skipping {name} - all NaN values", 'warning')
+                    continue
+                values = series.values.flatten()
+                index = pd.to_datetime(series.index)
+                clean_data[name] = pd.Series(values, index=index, name=name)
+                self._log(f"✓ {name}: {len(values)} records", 'info')
+            except Exception as e:
+                self._log(f"⚠ Failed to convert {name}: {e}", 'warning')
+
+        if not clean_data:
+            self._log("⚠ No valid market data available", 'warning')
+            return pd.DataFrame()
+
+        # ── 3. Assemble DataFrame ────────────────────────────────────
+        try:
+            df = pd.DataFrame(clean_data)
+            self._log(f"✓ Market data loaded: {len(df)} records, "
+                       f"{len(clean_data)} indicators", 'success')
+            return df
+        except Exception as e:
+            self._log(f"✗ DataFrame creation failed: {e}", 'error')
+            return pd.DataFrame()
+
+    def _time_align_market(self, market_data: pd.DataFrame) -> pd.DataFrame:
+        """Shift non-Australian close prices back one day to remove
+        look-ahead bias.  At 15:30 Sydney on day D only the D-1 close
+        for US/European markets is available."""
+        df = market_data.copy()
+        for col in self._SHIFT_COLS:
+            if col in df.columns:
+                df[col] = df[col].shift(1)
+        return df
+
     def prepare_combined_data(self) -> pd.DataFrame:
         """
-        Load local AustralianSuper data and merge with market data
-        Returns a single DataFrame with all features
+        Load local AustralianSuper data and merge with market data.
+        Non-Australian closes are shifted by one day so that training
+        only uses information available at the 15:30 Sydney decision time.
         """
         fund_data = self.load_local_data()
         if fund_data.empty:
@@ -409,65 +404,61 @@ class DataManager:
         if market_data.empty:
             return fund_data
         
+        # Time-align: shift non-Australian closes to avoid look-ahead bias
+        market_data = self._time_align_market(market_data)
+
         combined = fund_data.join(market_data, how='left')
         combined = combined.ffill()
         combined.dropna(inplace=True)
         return combined
     
     def fetch_live_asx200(self) -> Optional[pd.DataFrame]:
-        """Fetch today's live ASX200 data from Investing.com.
+        """Fetch today's live/intraday ASX200 price via yfinance ^AXJO.
+
         Returns a single-row DataFrame with daily_return and price,
         or None if today's data is not available or already in CSV.
         """
         try:
-            import requests as req
-            
+            import yfinance as yf
+
             fund_data = self.load_local_data()
             if fund_data.empty:
                 return None
-            
+
             last_csv_date = fund_data.index.max().date()
             today = date.today()
-            
+
             # Only fetch if today is newer than what's in the CSV
             if last_csv_date >= today:
                 return None
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                'domain-id': 'au',
-            }
-            
-            url = (
-                f"https://api.investing.com/api/financialdata/historical/171"
-                f"?start-date={today.strftime('%Y-%m-%d')}&end-date={today.strftime('%Y-%m-%d')}"
-                f"&time-frame=Daily&add-missing-rows=false"
-            )
-            
-            response = req.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            records = response.json().get('data', [])
-            
-            if not records:
-                self._log("No live ASX200 data available for today", 'info')
+
+            ticker = yf.Ticker("^AXJO")
+            info = ticker.fast_info
+
+            live_price = float(info.last_price)
+            prev_close = float(info.previous_close)
+            if live_price <= 0 or prev_close <= 0:
+                self._log("No live ASX200 data available", 'info')
                 return None
-            
-            # Use the first (most recent) record
-            rec = records[0]
-            live_price = float(rec['last_closeRaw'])
+
+            # Return relative to last price in our CSV for consistency
             prev_price = float(fund_data['price'].iloc[-1])
             live_return = (live_price - prev_price) / prev_price
-            
-            live_date = pd.Timestamp(rec['rowDateTimestamp']).normalize().tz_localize(None)
-            
+
+            live_date = pd.Timestamp(today)
+
             live_row = pd.DataFrame({
                 'daily_return': [live_return],
                 'price': [live_price]
             }, index=pd.DatetimeIndex([live_date], name='date'))
-            
-            self._log(f"✓ Live ASX200: {live_price:.2f} ({live_return*100:+.2f}%) as of {live_date.date()}", 'success')
+
+            intraday_chg = (live_price - prev_close) / prev_close * 100
+            self._log(
+                f"✓ Live ASX200: {live_price:,.2f} ({intraday_chg:+.2f}%) as of {today}",
+                'success'
+            )
             return live_row
-            
+
         except Exception as e:
             self._log(f"⚠ Could not fetch live ASX200 data: {e}", 'warning')
             return None
@@ -476,6 +467,7 @@ class DataManager:
         """
         Like prepare_combined_data but appends today's live ASX200 data
         so the prediction uses the most current information.
+        Non-Australian closes are shifted by one day (same as training).
         """
         fund_data = self.load_local_data()
         if fund_data.empty:
@@ -495,6 +487,9 @@ class DataManager:
         if market_data.empty:
             return fund_data
         
+        # Time-align: shift non-Australian closes to avoid look-ahead bias
+        market_data = self._time_align_market(market_data)
+
         combined = fund_data.join(market_data, how='left')
         
         if live_row is not None and len(combined) > 1:
@@ -571,7 +566,6 @@ class DataManager:
         return 'unknown'
 
     # ── Prediction History ───────────────────────────────────────────
-    HISTORY_PATH = 'data/asx200history.csv'
 
     def update_prediction_history(self) -> int:
         """Back-fill actual close prices and success flags for past predictions.
@@ -589,6 +583,12 @@ class DataManager:
         hist = pd.read_csv(self.HISTORY_PATH)
         if hist.empty or 'actual_close' not in hist.columns:
             return 0
+
+        # Force string columns to object dtype so .at assignments don't fail
+        for col in ('result_label', 'signal', 'confidence_level',
+                     'market_regime', 'model_version'):
+            if col in hist.columns:
+                hist[col] = hist[col].astype(object)
 
         pending = hist['actual_close'].isna()
         if not pending.any():
@@ -662,6 +662,13 @@ class DataManager:
         Returns number of rows patched.
         """
         patched = 0
+
+        # Force string columns to object dtype so .at assignments don't fail
+        for col in ('result_label', 'signal', 'confidence_level',
+                     'market_regime', 'model_version'):
+            if col in hist.columns:
+                hist[col] = hist[col].astype(object)
+
         completed = hist.dropna(subset=['success'])
 
         for idx in completed.index:
@@ -740,13 +747,18 @@ class DataManager:
         for fd in feature_details:
             row[f"feat_{fd['name']}"] = fd['value']
 
-        row['actual_close'] = None
-        row['actual_return'] = None
-        row['success'] = None
-        row['result_label'] = None
-        row['hypothetical_return'] = None
+        row['actual_close'] = np.nan
+        row['actual_return'] = np.nan
+        row['success'] = np.nan
+        row['result_label'] = ''
+        row['hypothetical_return'] = np.nan
 
         new_row = pd.DataFrame([row])
+        # Ensure string columns stay as object dtype so concat doesn't fail
+        for col in ('result_label', 'signal', 'confidence_level',
+                     'market_regime', 'model_version'):
+            if col in new_row.columns:
+                new_row[col] = new_row[col].astype(object)
 
         if os.path.exists(self.HISTORY_PATH):
             hist = pd.read_csv(self.HISTORY_PATH)
@@ -884,7 +896,7 @@ class DataManager:
             return None
         return pd.DataFrame(rows).sort_values('accuracy', ascending=False)
 
-    PERF_LOG_PATH = 'data/performance_log.csv'
+    # PERF_LOG_PATH is set in __init__ from config['data_folder']
 
     def save_performance_snapshot(self) -> None:
         """Append a daily summary row to performance_log.csv.

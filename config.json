@@ -1,13 +1,14 @@
 {
+    "data_folder": "/Users/markpinnuck/Library/Application Support/AusSuperPredictor/data",
     "data": {
-        "local_csv_path": "data/australian_super_daily.csv",
+        "local_csv_path": "/Users/markpinnuck/Library/Application Support/AusSuperPredictor/data/australian_super_daily.csv",
         "start_date": "01/07/2008",
         "end_date_offset_days": 1,
         "fund_option": "Australian Shares"
     },
     "model": {
-        "save_path": "data/model.pkl",
-        "features_save_path": "data/features.pkl",
+        "save_path": "/Users/markpinnuck/Library/Application Support/AusSuperPredictor/data/model.pkl",
+        "features_save_path": "/Users/markpinnuck/Library/Application Support/AusSuperPredictor/data/features.pkl",
         "n_estimators": 100,
         "max_depth": 7,
         "min_samples_split": 10,
@@ -15,10 +16,65 @@
         "random_state": 42
     },
     "schedule": {
-        "auto_run_time": "15:30",
         "market_close_time": "16:00"
     },
     "logging": {
         "level": "INFO"
-    }
+    },
+    "email": {
+        "enabled": true,
+        "smtp_server": "smtp.gmail.com",
+        "smtp_port": 587,
+        "from": "mark.pinnuck@gmail.com",
+        "to": "mgpinnuck@gmail.com",
+        "username": "mark.pinnuck@gmail.com"
+    },
+    "market_sources": [
+        {
+            "name": "asx_futures",
+            "ticker": "8824",
+            "source": "investing",
+            "shift": false
+        },
+        {
+            "name": "sp500_futures",
+            "ticker": "ES=F",
+            "shift": false
+        },
+        {
+            "name": "vix",
+            "ticker": "^VIX",
+            "shift": true
+        },
+        {
+            "name": "asx_vix",
+            "ticker": "^AXVI",
+            "shift": true
+        },
+        {
+            "name": "gold",
+            "ticker": "GC=F",
+            "shift": true
+        },
+        {
+            "name": "copper",
+            "ticker": "HG=F",
+            "shift": true
+        },
+        {
+            "name": "oil",
+            "ticker": "CL=F",
+            "shift": true
+        },
+        {
+            "name": "iron_ore_proxy",
+            "ticker": "BHP.AX",
+            "shift": false
+        },
+        {
+            "name": "audusd",
+            "ticker": "AUDUSD=X",
+            "shift": false
+        }
+    ]
 }

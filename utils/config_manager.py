@@ -10,21 +10,31 @@ class ConfigManager:
     """Handles loading and saving of application configuration"""
     
     DEFAULT_CONFIG = {
+        "data_folder": "~/Library/Application Support/AusSuperPredictor/data",
         "data": {
-            "local_csv_path": "data/australian_super_daily.csv",
+            "local_csv_path": "australian_super_daily.csv",
             "start_date": "01/07/2008",
             "end_date_offset_days": 1,
             "fund_option": "Australian Shares"
         },
         "model": {
-            "save_path": "data/model.pkl",
-            "features_save_path": "data/features.pkl",
+            "save_path": "model.pkl",
+            "features_save_path": "features.pkl",
             "n_estimators": 100,
             "max_depth": 10,
             "random_state": 42
         },
         "logging": {
             "level": "INFO"
+        },
+        "email": {
+            "enabled": False,
+            "smtp_server": "smtp.gmail.com",
+            "smtp_port": 587,
+            "username": "",
+            "password": "",
+            "from": "",
+            "to": ""
         }
     }
     

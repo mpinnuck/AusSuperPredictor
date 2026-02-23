@@ -34,7 +34,3 @@ class SydneyTimeUtils:
         
         return hours, minutes, secs
     
-    def is_auto_run_time(self, target_hour: int = 15, target_minute: int = 30) -> bool:
-        """Check if current time is within auto-run window"""
-        now = self.now()
-        return now.hour == target_hour and now.minute == target_minute and now.second < 10

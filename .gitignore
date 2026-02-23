@@ -35,6 +35,9 @@ data/performance_log.csv
 data/last_training.json
 data/feature_names.txt
 
+# Secrets
+.env
+
 # Logs
 *.log
 

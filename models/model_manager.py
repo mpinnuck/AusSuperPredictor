@@ -93,8 +93,11 @@ class ModelManager:
         # Futures features
         if 'asx_futures' in df.columns:
             df['asx_futures_return'] = df['asx_futures'].pct_change()
-            df['futures_premium'] = df['asx_futures'] / df['price'] - 1
-        
+            # Premium of futures vs yesterday's close (available at 15:30)
+            df['yesterday_close'] = df['price'].shift(1)
+            df['futures_premium'] = df['asx_futures'] / df['yesterday_close'] - 1
+            df.drop(columns=['yesterday_close'], inplace=True)
+
         if 'sp500_futures' in df.columns:
             df['sp500_futures_return'] = df['sp500_futures'].pct_change()
         
@@ -102,6 +105,14 @@ class ModelManager:
         if 'vix' in df.columns:
             df['vix_change'] = df['vix'].pct_change()
             df['vix_level'] = df['vix']
+        
+        # ASX200 VIX (local fear gauge)
+        if 'asx_vix' in df.columns:
+            df['asx_vix_change'] = df['asx_vix'].pct_change()
+            df['asx_vix_level'] = df['asx_vix']
+            # Spread: local vs global fear divergence
+            if 'vix' in df.columns:
+                df['vix_spread'] = df['asx_vix'] - df['vix']
         
         # Commodity returns
         for commodity in ['gold', 'copper', 'oil', 'iron_ore_proxy']:
@@ -128,6 +139,7 @@ class ModelManager:
         # When predicting, forward-fill computed features so the live row
         # inherits the latest market returns instead of NaN
         if for_prediction:
+            last_row = df.iloc[[-1]].copy()
             df = df.ffill()
         
         # Drop NaN rows from feature engineering
@@ -137,6 +149,16 @@ class ModelManager:
         
         if rows_dropped > 0:
             self._log(f"⚠ Dropped {rows_dropped} rows with NaN values", 'warning')
+        
+        # Ensure the live row survives for prediction — if dropna removed it,
+        # re-append the forward-filled version so predict() has something to use.
+        if for_prediction and (df.empty or df.index[-1] != last_row.index[0]):
+            last_filled = last_row.ffill(axis=0)
+            nan_cols = last_filled.columns[last_filled.isna().any()].tolist()
+            if nan_cols:
+                self._log(f"⚠ Live row still has NaN in: {nan_cols} — filling with 0", 'warning')
+                last_filled = last_filled.fillna(0)
+            df = pd.concat([df, last_filled])
         
         if df.empty:
             self._log("⚠ No valid data after feature engineering", 'warning')

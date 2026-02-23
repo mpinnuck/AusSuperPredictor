@@ -9,6 +9,7 @@ from models.data_manager import DataManager
 from models.model_manager import ModelManager
 from utils.time_utils import SydneyTimeUtils
 from utils.queue_handler import QueueHandler
+from utils.email_sender import send_prediction_email, send_training_email
 
 class MainViewModel:
     """ViewModel for the main window - handles all business logic for the View"""
@@ -26,10 +27,6 @@ class MainViewModel:
         self.is_updating = False
         self.is_training = False
         self.is_predicting = False
-        self.auto_run_enabled = False
-        self.last_auto_run_date = None
-        self.auto_run_hour, self.auto_run_minute = self._parse_time(
-            config.get('schedule', {}).get('auto_run_time', '15:30'))
         self.market_close_hour, self.market_close_minute = self._parse_time(
             config.get('schedule', {}).get('market_close_time', '16:00'))
         
@@ -57,17 +54,114 @@ class MainViewModel:
             hour = 0
         return hour, minute
     
-    def save_schedule(self):
-        """Persist current schedule times to config.json."""
+    # ── Email credential helpers (.env) ────────────────────────
+
+    def _env_path(self) -> "Path":
+        """Return the .env file path.
+
+        cwd is the primary location (set to App Support for frozen builds,
+        project dir for dev).  Source-relative is a read-only fallback.
+        """
+        from pathlib import Path
+        primary = Path.cwd() / ".env"
+        if primary.is_file():
+            return primary
+        fallback = Path(__file__).resolve().parent.parent / ".env"
+        if fallback.is_file():
+            return fallback
+        return primary  # default to cwd for creation
+
+    def load_email_credentials(self) -> dict:
+        """Read ASP_EMAIL_USERNAME / ASP_EMAIL_PASSWORD from .env."""
+        env_path = self._env_path()
+        creds = {"username": "", "password": ""}
+        if not env_path.is_file():
+            return creds
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip("\"'")
+                if key == "ASP_EMAIL_USERNAME":
+                    creds["username"] = value
+                elif key == "ASP_EMAIL_PASSWORD":
+                    creds["password"] = value
+        return creds
+
+    def save_email_credentials(self, username: str, password: str, *,
+                               email_to: str = "", enabled: bool | None = None):
+        """Write ASP_EMAIL_USERNAME / ASP_EMAIL_PASSWORD to .env and config fields to config.json."""
+        env_path = self._env_path()
+
+        # Read existing lines, preserving non-email entries
+        existing_lines: list[str] = []
+        if env_path.is_file():
+            with open(env_path) as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped.startswith("ASP_EMAIL_USERNAME=") or stripped.startswith("ASP_EMAIL_PASSWORD="):
+                        continue
+                    existing_lines.append(line.rstrip("\n"))
+
+        # Append credentials
+        if username:
+            existing_lines.append(f"ASP_EMAIL_USERNAME={username}")
+        if password:
+            existing_lines.append(f"ASP_EMAIL_PASSWORD={password}")
+
+        with open(env_path, "w") as f:
+            f.write("\n".join(existing_lines) + "\n")
+
+        # Update config so email_sender picks it up
+        self.config.setdefault("email", {})["username"] = username
+        self.config["email"]["from"] = username
+        if email_to:
+            self.config["email"]["to"] = email_to
+        if enabled is not None:
+            self.config["email"]["enabled"] = enabled
+
+        # Persist non-secret email fields to config.json
         import json
-        self.config.setdefault('schedule', {})
-        self.config['schedule']['auto_run_time'] = f"{self.auto_run_hour:02d}:{self.auto_run_minute:02d}"
-        self.config['schedule']['market_close_time'] = f"{self.market_close_hour:02d}:{self.market_close_minute:02d}"
+        try:
+            with open("config.json", "w") as f:
+                json.dump(self.config, f, indent=4)
+        except Exception:
+            pass
+
+        self.log_queue.put("✓ Email settings saved", 'success')
+
+    def update_data_folder(self, new_folder: str):
+        """Update data folder path, re-derive all file paths, and save config."""
+        import json
+        import os
+        new_folder = os.path.expanduser(new_folder.strip())
+        if not os.path.isabs(new_folder):
+            new_folder = os.path.abspath(new_folder)
+        os.makedirs(new_folder, exist_ok=True)
+
+        self.config['data_folder'] = new_folder
+        self.config['data']['local_csv_path'] = os.path.join(new_folder, 'australian_super_daily.csv')
+        self.config['model']['save_path'] = os.path.join(new_folder, 'model.pkl')
+        self.config['model']['features_save_path'] = os.path.join(new_folder, 'features.pkl')
+
+        # Live-update managers so a restart is not required
+        self.data_manager.local_csv_path = self.config['data']['local_csv_path']
+        self.data_manager.HISTORY_PATH = os.path.join(new_folder, 'asx200history.csv')
+        self.data_manager.PERF_LOG_PATH = os.path.join(new_folder, 'performance_log.csv')
+        self.model_manager.model_path = self.config['model']['save_path']
+        self.model_manager.features_path = self.config['model']['features_save_path']
+
         try:
             with open('config.json', 'w') as f:
                 json.dump(self.config, f, indent=4)
+            self.log_queue.put(f"✓ Data folder updated to: {new_folder}", 'success')
         except Exception as e:
-            self.log_queue.put(f"⚠ Could not save schedule: {e}", 'warning')
+            self.log_queue.put(f"⚠ Could not save data folder: {e}", 'warning')
+
+        self._refresh_last_date()
     
     def _refresh_last_date(self):
         """Refresh last data date from storage"""
@@ -82,18 +176,6 @@ class MainViewModel:
         self.countdown = f"{h:02d}:{m:02d}:{s:02d}"
         if self.on_state_changed:
             self.on_state_changed()
-    
-    def check_auto_run(self) -> bool:
-        """Check if auto-run should trigger"""
-        if not self.auto_run_enabled:
-            return False
-        
-        if self.time_utils.is_auto_run_time(self.auto_run_hour, self.auto_run_minute):
-            today = datetime.now().date()
-            if self.last_auto_run_date != today:
-                self.last_auto_run_date = today
-                return True
-        return False
     
     # ========== Background Operations ==========
     
@@ -238,6 +320,7 @@ class MainViewModel:
                                 self.log_queue.put(
                                     f"    {arrow} {name}: {new_imp:.4f} ({delta:+.4f})", 'info'
                                 )
+
                 else:
                     self.log_queue.put(f"Error training model: {result['message']}", 'error')
                     
@@ -357,13 +440,16 @@ class MainViewModel:
                     for fd in feature_details[:15]:
                         val = fd['value']
                         imp = fd['importance']
-                        # Format value: percentages for returns, otherwise raw
-                        if 'return' in fd['name'] or fd['name'] == 'macd_histogram':
-                            val_str = f"{val:>+12.4f}"
+                        name = fd['name']
+                        is_pct = ('return' in name or 'change' in name
+                                  or 'premium' in name
+                                  or name == 'macd_histogram')
+                        if is_pct:
+                            val_str = f"{val*100:>+10.2f}%"
                         else:
-                            val_str = f"{val:>12.4f}"
+                            val_str = f"{val:>11.4f}"
                         self.log_queue.put(
-                            f"{fd['name']:<30} {val_str} {imp:>10.4f}", 'info'
+                            f"{name:<30} {val_str:>12} {imp:>10.4f}", 'info'
                         )
                     
                     # ── Step 3: save prediction to history CSV
@@ -452,6 +538,21 @@ class MainViewModel:
             if prev:
                 d_test = result['test_accuracy'] - prev.get('test_accuracy', 0)
                 self.log_queue.put(f"Test acc delta: {d_test:+.3f}", 'info')
+
+            # Email training results
+            try:
+                sent = send_training_email(self.config, {
+                    "train_accuracy": result['train_accuracy'],
+                    "test_accuracy": result['test_accuracy'],
+                    "feature_importance": result['feature_importance'],
+                    "calibration": result.get('calibration', {}),
+                    "prev": prev,
+                })
+                if sent:
+                    self.log_queue.put("Training results emailed.", 'info')
+            except Exception as e:
+                self.log_queue.put(f"Email send failed: {e}", 'warning')
+
             return True
         except Exception as e:
             self.log_queue.put(f"Error: {e}", 'error')
@@ -525,6 +626,24 @@ class MainViewModel:
                 model_version=model_ver,
                 market_regime=market_reg,
             )
+
+            # Email prediction results
+            try:
+                sent = send_prediction_email(self.config, {
+                    "prediction_date": next_day.strftime('%Y-%m-%d'),
+                    "base_date": latest_date.strftime('%Y-%m-%d'),
+                    "base_price": latest_price,
+                    "probability": prob,
+                    "decision": decision['decision'],
+                    "confidence_level": decision['confidence_level'],
+                    "market_regime": market_reg,
+                    "model_version": model_ver,
+                    "feature_details": decision['feature_details'],
+                })
+                if sent:
+                    self.log_queue.put("Prediction emailed.", 'info')
+            except Exception as e:
+                self.log_queue.put(f"Email send failed: {e}", 'warning')
 
             try:
                 self.data_manager.save_performance_snapshot()

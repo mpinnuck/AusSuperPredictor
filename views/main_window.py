@@ -102,38 +102,72 @@ class MainWindow:
         )
         self.view_model_btn.grid(row=4, column=2, padx=5, pady=5)
         
-        # Auto-run checkbox and time editors
-        schedule_frame = ttk.Frame(top_frame)
-        schedule_frame.grid(row=5, column=0, columnspan=3, sticky='w', pady=5)
+        # Data folder
+        ttk.Label(top_frame, text="Data folder:").grid(
+            row=5, column=0, sticky='e', padx=5, pady=5)
+        self.data_folder_var = tk.StringVar(
+            value=self.viewmodel.config.get('data_folder', 'data'))
+        data_folder_entry = ttk.Entry(
+            top_frame, textvariable=self.data_folder_var, width=50)
+        data_folder_entry.grid(row=5, column=1, sticky='ew', padx=5, pady=5)
+        data_folder_entry.bind('<Return>', lambda e: self._on_data_folder_changed())
+        data_folder_entry.bind('<FocusOut>', lambda e: self._on_data_folder_changed())
         
-        self.auto_var = tk.BooleanVar(value=self.viewmodel.auto_run_enabled)
+        self.browse_btn = ttk.Button(
+            top_frame,
+            text="Browse…",
+            command=self._on_browse_data_folder,
+            width=8
+        )
+        self.browse_btn.grid(row=5, column=2, padx=5, pady=5)
+
+        # Email settings
+        email_creds = self.viewmodel.load_email_credentials()
+        email_cfg = self.viewmodel.config.get('email', {})
+        email_cfg_user = email_cfg.get('username', '')
+
+        self.email_enabled_var = tk.BooleanVar(value=email_cfg.get('enabled', False))
         ttk.Checkbutton(
-            schedule_frame, 
-            text="Auto-run at",
-            variable=self.auto_var,
-            command=self._on_auto_run_toggle
-        ).pack(side=tk.LEFT)
-        
-        self.auto_run_time_var = tk.StringVar(
-            value=f"{self.viewmodel.auto_run_hour:02d}:{self.viewmodel.auto_run_minute:02d}")
-        auto_run_entry = ttk.Entry(schedule_frame, textvariable=self.auto_run_time_var, width=6)
-        auto_run_entry.pack(side=tk.LEFT, padx=(2, 8))
-        auto_run_entry.bind('<FocusOut>', lambda e: self._on_schedule_changed())
-        auto_run_entry.bind('<Return>', lambda e: self._on_schedule_changed())
-        
-        ttk.Label(schedule_frame, text="Market close:").pack(side=tk.LEFT)
-        self.market_close_time_var = tk.StringVar(
-            value=f"{self.viewmodel.market_close_hour:02d}:{self.viewmodel.market_close_minute:02d}")
-        close_entry = ttk.Entry(schedule_frame, textvariable=self.market_close_time_var, width=6)
-        close_entry.pack(side=tk.LEFT, padx=(2, 8))
-        close_entry.bind('<FocusOut>', lambda e: self._on_schedule_changed())
-        close_entry.bind('<Return>', lambda e: self._on_schedule_changed())
-        
-        ttk.Label(schedule_frame, text="(Sydney time)").pack(side=tk.LEFT)
-        
+            top_frame,
+            text="Email enabled (emails prediction results when run from command line)",
+            variable=self.email_enabled_var,
+        ).grid(row=6, column=1, columnspan=2, sticky='w', padx=5, pady=2)
+
+        ttk.Label(top_frame, text="Email user:").grid(
+            row=7, column=0, sticky='e', padx=5, pady=2)
+        self.email_user_var = tk.StringVar(
+            value=email_creds.get('username') or email_cfg_user)
+        email_user_entry = ttk.Entry(
+            top_frame, textvariable=self.email_user_var, width=30)
+        email_user_entry.grid(row=7, column=1, sticky='w', padx=5, pady=2)
+
+        ttk.Label(top_frame, text="Email password:").grid(
+            row=8, column=0, sticky='e', padx=5, pady=2)
+        self.email_pass_var = tk.StringVar(
+            value=email_creds.get('password', ''))
+        email_pass_entry = ttk.Entry(
+            top_frame, textvariable=self.email_pass_var, width=30, show='•')
+        email_pass_entry.grid(row=8, column=1, sticky='w', padx=5, pady=2)
+
+        ttk.Label(top_frame, text="Email to:").grid(
+            row=9, column=0, sticky='e', padx=5, pady=2)
+        self.email_to_var = tk.StringVar(
+            value=email_cfg.get('to', ''))
+        email_to_entry = ttk.Entry(
+            top_frame, textvariable=self.email_to_var, width=30)
+        email_to_entry.grid(row=9, column=1, sticky='w', padx=5, pady=2)
+
+        self.email_save_btn = ttk.Button(
+            top_frame,
+            text="Save",
+            command=self._on_save_email_credentials,
+            width=8
+        )
+        self.email_save_btn.grid(row=9, column=2, padx=5, pady=2)
+
         # Buttons
         button_frame = ttk.Frame(top_frame)
-        button_frame.grid(row=6, column=0, columnspan=4, pady=10)
+        button_frame.grid(row=10, column=0, columnspan=4, pady=10)
         
         self.update_btn = ttk.Button(
             button_frame, 
@@ -189,7 +223,6 @@ class MainWindow:
     def _start_periodic_updates(self):
         """Start periodic UI updates"""
         self._update_countdown()
-        self._check_auto_run()
         self._process_log_queue()
     
     def _update_countdown(self):
@@ -198,39 +231,12 @@ class MainWindow:
         self.countdown_label.config(text=self._get_countdown_string())
         self.root.after(1000, self._update_countdown)
     
-    def _check_auto_run(self):
-        """Check for auto-run trigger every minute"""
-        if self.viewmodel.check_auto_run():
-            self.viewmodel.predict_async()
-        self.root.after(60000, self._check_auto_run)
-    
     def _process_log_queue(self):
         """Process queued log messages every 100ms"""
         messages = self.viewmodel.log_queue.get_all()
         for msg, level in messages:
             self.log_panel.log(msg, level)
         self.root.after(100, self._process_log_queue)
-    
-    def _on_auto_run_toggle(self):
-        """Handle auto-run checkbox toggle"""
-        self.viewmodel.auto_run_enabled = self.auto_var.get()
-    
-    def _on_schedule_changed(self):
-        """Parse time entries and persist to config.json"""
-        try:
-            ar_h, ar_m = self.viewmodel._parse_time(self.auto_run_time_var.get())
-            mc_h, mc_m = self.viewmodel._parse_time(self.market_close_time_var.get())
-            self.viewmodel.auto_run_hour = ar_h
-            self.viewmodel.auto_run_minute = ar_m
-            self.viewmodel.market_close_hour = mc_h
-            self.viewmodel.market_close_minute = mc_m
-            # Normalise display
-            self.auto_run_time_var.set(f"{ar_h:02d}:{ar_m:02d}")
-            self.market_close_time_var.set(f"{mc_h:02d}:{mc_m:02d}")
-            # Persist to config.json
-            self.viewmodel.save_schedule()
-        except (ValueError, IndexError):
-            pass  # ignore invalid input until user fixes it
     
     def _on_update_clicked(self):
         """Handle Update Data button click"""
@@ -243,6 +249,37 @@ class MainWindow:
     def _on_predict_clicked(self):
         """Handle Run Prediction button click"""
         self.viewmodel.predict_async()
+    
+    def _on_save_email_credentials(self):
+        """Save email username, password to .env and enabled/to to config."""
+        username = self.email_user_var.get().strip()
+        password = self.email_pass_var.get().strip()
+        email_to = self.email_to_var.get().strip()
+        enabled = self.email_enabled_var.get()
+        self.viewmodel.save_email_credentials(
+            username, password, email_to=email_to, enabled=enabled)
+
+    def _on_browse_data_folder(self):
+        """Open a folder picker for the data directory."""
+        from tkinter import filedialog
+        current = self.viewmodel.config.get('data_folder', '')
+        folder = filedialog.askdirectory(
+            title="Select Data Folder",
+            initialdir=current if os.path.isdir(current) else None)
+        if folder:
+            self.data_folder_var.set(folder)
+            self._on_data_folder_changed()
+    
+    def _on_data_folder_changed(self):
+        """Persist a change to the data folder path."""
+        new_folder = self.data_folder_var.get().strip()
+        if not new_folder:
+            return
+        current = self.viewmodel.config.get('data_folder', '')
+        if new_folder != current:
+            self.viewmodel.update_data_folder(new_folder)
+            # Refresh file-existence indicators
+            self.update_ui()
     
     def _on_view_data_clicked(self):
         """Handle View Data button click"""
@@ -309,8 +346,7 @@ class MainWindow:
         # Update last date label
         self.last_date_label.config(text=self.viewmodel.last_data_date)
         
-        # Update auto-run checkbox
-        self.auto_var.set(self.viewmodel.auto_run_enabled)
+
     
     def _center_window(self):
         """Center the window on the screen"""
