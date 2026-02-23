@@ -8,11 +8,20 @@ Usage:
   python AusSuperPredictor.py --predict    # Run prediction (headless)
   python AusSuperPredictor.py --all        # Train then predict (headless)
 
-Build
-cd /Users/markpinnuck/Dev/GitHub/AusSuperPredictor
-source .venv/bin/activate
-.venv/bin/pyinstaller AusSuperPredictor.spec --noconfirm  --clean --log-level=ERROR
-cp -R dist/AusSuperPredictor.app /Applications/
+Build:
+  cd /Users/markpinnuck/Dev/GitHub/AusSuperPredictor
+  source .venv/bin/activate
+  .venv/bin/pyinstaller AusSuperPredictor.spec --noconfirm  --clean
+  cp -R dist/AusSuperPredictor.app /Applications/
+
+CLI (bundled app):
+  open /Applications/AusSuperPredictor.app --args --train
+  open /Applications/AusSuperPredictor.app --args --predict
+  open /Applications/AusSuperPredictor.app --args --all
+
+launchctl load ~/Library/LaunchAgents/com.aussuperpredictor.train.plist
+launchctl load ~/Library/LaunchAgents/com.aussuperpredictor.predict.plist
+
 """
 import sys
 import os
@@ -25,7 +34,7 @@ from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 
 # Application version
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 APP_NAME = "AusSuperPredictor"
 
@@ -48,12 +57,29 @@ _DEFAULT_CONFIG = {
         "random_state": 42
     },
     "schedule": {
-        "auto_run_time": "15:30",
         "market_close_time": "16:00"
     },
     "logging": {
         "level": "INFO"
-    }
+    },
+    "email": {
+        "enabled": False,
+        "smtp_server": "smtp.gmail.com",
+        "smtp_port": 587,
+        "from": "",
+        "to": ""
+    },
+    "market_sources": [
+        {"name": "asx_futures", "ticker": "8824", "source": "investing", "shift": False},
+        {"name": "sp500_futures", "ticker": "ES=F", "shift": False},
+        {"name": "vix", "ticker": "^VIX", "shift": True},
+        {"name": "asx_vix", "ticker": "^AXVI", "shift": True},
+        {"name": "gold", "ticker": "GC=F", "shift": True},
+        {"name": "copper", "ticker": "HG=F", "shift": True},
+        {"name": "oil", "ticker": "CL=F", "shift": True},
+        {"name": "iron_ore_proxy", "ticker": "BHP.AX", "shift": False},
+        {"name": "audusd", "ticker": "AUDUSD=X", "shift": False}
+    ]
 }
 
 
