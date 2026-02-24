@@ -14,6 +14,33 @@ import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
+
+def get_max_rolling_lag_window(config: dict) -> int:
+    """
+    Determine the largest rolling or lag window needed for feature engineering.
+    Includes lagged returns and config-driven technical indicators.
+    """
+    # Lagged returns (hardcoded in engineer_features)
+    lagged_lags = [1, 2, 3, 5]
+    max_lag = max(lagged_lags) if lagged_lags else 0
+
+    # Technical indicators
+    indicators = config.get('technical_indicators', [
+        {'type': 'macd', 'fast': 12, 'slow': 26, 'signal': 9},
+        {'type': 'rsi', 'period': 14},
+    ])
+    max_window = max_lag
+    for ind in indicators:
+        if ind['type'] == 'macd':
+            fast = ind.get('fast', 12)
+            slow = ind.get('slow', 26)
+            sig = ind.get('signal', 9)
+            max_window = max(max_window, fast, slow, sig)
+        elif ind['type'] == 'rsi':
+            period = ind.get('period', 14)
+            max_window = max(max_window, period)
+    return max_window
+
 class ModelManager:
     """Manages all ML model operations"""
     
@@ -154,9 +181,9 @@ class ModelManager:
         initial_rows = len(df)
         df.dropna(inplace=True)
         rows_dropped = initial_rows - len(df)
-        
-        if rows_dropped > 0:
-            self._log(f"⚠ Dropped {rows_dropped} rows with NaN values", 'warning')
+        min_nan_drop_log_rows = get_max_rolling_lag_window(self.config)
+        if rows_dropped >= min_nan_drop_log_rows:
+            self._log(f"⚠ Dropped {rows_dropped} rows with NaN values (warmup for rolling/lagged features)", 'warning')
         
         # Ensure the live row survives for prediction — if dropna removed it,
         # re-append the forward-filled version so predict() has something to use.

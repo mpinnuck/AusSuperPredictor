@@ -35,13 +35,17 @@
             "ticker": "8824",
             "source": "investing",
             "shift": false,
-            "category": "futures"
+            "category": "futures",
+            "live_source": "investing",
+            "live_ticker": "8824"
         },
         {
             "name": "sp500_futures",
             "ticker": "ES=F",
             "shift": false,
-            "category": "futures"
+            "category": "futures",
+            "live_source": "investing",
+            "live_ticker": "1175153"
         },
         {
             "name": "vix",

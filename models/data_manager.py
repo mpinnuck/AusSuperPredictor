@@ -16,8 +16,8 @@ class DataManager:
     
     # Default market sources (used when config omits the key)
     _DEFAULT_MARKET_SOURCES = [
-        {'name': 'asx_futures',    'ticker': '8824',     'source': 'investing', 'shift': False, 'category': 'futures'},
-        {'name': 'sp500_futures',  'ticker': 'ES=F',      'shift': False, 'category': 'futures'},
+        {'name': 'asx_futures',    'ticker': '8824',     'source': 'investing', 'shift': False, 'category': 'futures', 'live_source': 'investing', 'live_ticker': '8824'},
+        {'name': 'sp500_futures',  'ticker': 'ES=F',      'shift': False, 'category': 'futures', 'live_source': 'investing', 'live_ticker': '1175153'},
         {'name': 'vix',            'ticker': '^VIX',      'shift': True,  'category': 'volatility'},
         {'name': 'asx_vix',        'ticker': '^AXVI',     'shift': True,  'category': 'volatility'},
         {'name': 'gold',           'ticker': 'GC=F',      'shift': True,  'category': 'commodity'},
@@ -462,54 +462,124 @@ class DataManager:
         except Exception as e:
             self._log(f"⚠ Could not fetch live ASX200 data: {e}", 'warning')
             return None
-    
-    def prepare_combined_data_for_prediction(self) -> pd.DataFrame:
+
+    def fetch_live_market_quotes(self) -> Dict[str, float]:
+        """Fetch live prices for non-shifted market sources.
+
+        At prediction time (15:45 Sydney) we need current prices for
+        instruments that trade live during Australian hours:
+          - futures  (sp500_futures, asx_futures via yfinance)
+          - non-shifted commodities (iron_ore_proxy / BHP.AX)
+          - currency (audusd)
+
+        Shifted sources (vix, gold, copper, oil) use yesterday's daily
+        close which is already in the historical data — no live fetch needed.
+
+        Returns a dict  {source_name: live_price}.
         """
-        Like prepare_combined_data but appends today's live ASX200 data
-        so the prediction uses the most current information.
-        Non-Australian closes are shifted by one day (same as training).
+        import yfinance as yf
+
+        quotes: Dict[str, float] = {}
+        for src in self.MARKET_SOURCES:
+            if src['shift']:
+                continue  # shifted sources don't need live data
+            name = src['name']
+            ticker_str = src['ticker']
+            source = src.get('source', 'yfinance')
+
+            # Allow per-source live override (e.g. sp500_futures uses
+            # Investing.com for real-time quotes instead of delayed yfinance)
+            live_source = src.get('live_source', source)
+            live_ticker = src.get('live_ticker', ticker_str)
+
+            # Investing.com sources — use their API
+            if live_source == 'investing':
+                try:
+                    today = date.today()
+                    series = self._fetch_investing_series(
+                        pair_id=int(live_ticker),
+                        start_date=today - timedelta(days=5),
+                        end_date=today,
+                    )
+                    if series is not None and not series.empty:
+                        live_px = float(series.iloc[-1])
+                        quotes[name] = live_px
+                        if len(series) >= 2:
+                            prev_px = float(series.iloc[-2])
+                            pct = (live_px - prev_px) / prev_px * 100
+                            self._log(f"✓ Live {name}: {live_px:,.2f} ({pct:+.2f}%)", 'success')
+                        else:
+                            self._log(f"✓ Live {name}: {live_px:,.2f}", 'success')
+                except Exception as e:
+                    self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
+                continue
+
+            # yfinance sources — use fast_info for a quick live quote
+            try:
+                t = yf.Ticker(ticker_str)
+                info = t.fast_info
+                price = float(info.last_price)
+                prev = float(info.previous_close)
+                if price > 0:
+                    pct = (price - prev) / prev * 100
+                    quotes[name] = price
+                    self._log(
+                        f"✓ Live {name}: {price:,.4f} ({pct:+.2f}%)",
+                        'success',
+                    )
+            except Exception as e:
+                self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
+
+        return quotes
+
+    def prepare_combined_data_for_prediction(self) -> pd.DataFrame:
+        """Prepare data for prediction with live market prices.
+
+        Pipeline:
+        1. Load local AustralianSuper CSV
+        2. Append today's live ASX200 row (price + daily_return)
+        3. Fetch historical market data and time-align (shift) as in training
+        4. Join market data to fund data
+        5. Fetch live quotes for non-shifted sources and inject into the
+           live row so that pct_change() in engineer_features computes
+           (live_price − yesterday_settlement) / yesterday_settlement
+           — the same type of return the model was trained on.
+        6. Forward-fill remaining gaps.
         """
         fund_data = self.load_local_data()
         if fund_data.empty:
             return pd.DataFrame()
-        
+
         # Append live data for today if available
         live_row = self.fetch_live_asx200()
         if live_row is not None:
             fund_data = pd.concat([fund_data, live_row])
             fund_data = fund_data[~fund_data.index.duplicated(keep='last')]
             fund_data.sort_index(inplace=True)
-        
+
         end_date = fund_data.index.max().date()
         market_end = end_date + timedelta(days=1)
         market_data = self.get_market_data(market_end)
-        
+
         if market_data.empty:
             return fund_data
-        
+
         # Time-align: shift non-Australian closes to avoid look-ahead bias
         market_data = self._time_align_market(market_data)
 
         combined = fund_data.join(market_data, how='left')
-        
+
+        # ── Inject live market prices into the live row ──────────────
         if live_row is not None and len(combined) > 1:
-            # Identify market columns that are NaN in the live row (no market data yet)
-            market_cols = [c for c in market_data.columns if c in combined.columns]
-            live_market_nans = combined.iloc[-1][market_cols].isna()
-            
-            # Forward-fill everything (needed for historical rows)
-            combined = combined.ffill()
-            
-            # Restore NaN for the live row's market columns that had no data.
-            # This ensures pct_change in engineer_features computes NaN (not 0)
-            # for the live row. engineer_features will then ffill the computed
-            # features so the live row inherits the previous day's market returns.
-            for col in market_cols:
-                if live_market_nans.get(col, False):
-                    combined.iloc[-1, combined.columns.get_loc(col)] = np.nan
-        else:
-            combined = combined.ffill()
-        
+            live_quotes = self.fetch_live_market_quotes()
+            for col, price in live_quotes.items():
+                if col in combined.columns:
+                    combined.iloc[-1, combined.columns.get_loc(col)] = price
+
+        # Forward-fill remaining gaps (historical rows + any sources
+        # that failed to return a live quote)
+        combined = combined.ffill()
+
         combined.dropna(subset=['daily_return', 'price'], inplace=True)
         return combined
     
