@@ -24,6 +24,7 @@ class ModelManager:
         self.feature_columns = None
         self.model_path = config['model']['save_path']
         self.features_path = config['model']['features_save_path']
+        self.market_sources = config.get('market_sources', [])
         
         # Get params with defaults for backward compatibility
         self.n_estimators = config['model'].get('n_estimators', 100)
@@ -90,51 +91,58 @@ class ModelManager:
         for lag in [1, 2, 3, 5]:
             df[f'return_lag_{lag}'] = df['daily_return'].shift(lag)
         
-        # Futures features
-        if 'asx_futures' in df.columns:
-            df['asx_futures_return'] = df['asx_futures'].pct_change()
-            # Premium of futures vs yesterday's close (available at 15:30)
-            df['yesterday_close'] = df['price'].shift(1)
-            df['futures_premium'] = df['asx_futures'] / df['yesterday_close'] - 1
-            df.drop(columns=['yesterday_close'], inplace=True)
+        # ── Config-driven market-source features ──────────────────────
+        vol_sources = []  # track volatility sources for cross-feature
+        for src in self.market_sources:
+            name = src['name']
+            cat = src.get('category', 'commodity')
+            if name not in df.columns:
+                continue
 
-        if 'sp500_futures' in df.columns:
-            df['sp500_futures_return'] = df['sp500_futures'].pct_change()
+            if cat == 'futures':
+                df[f'{name}_return'] = df[name].pct_change()
+                # Premium vs yesterday's close for local futures
+                if src.get('source') == 'investing':
+                    yesterday_close = df['price'].shift(1)
+                    df['futures_premium'] = df[name] / yesterday_close - 1
+
+            elif cat == 'volatility':
+                df[f'{name}_change'] = df[name].pct_change()
+                df[f'{name}_level'] = df[name]
+                vol_sources.append(name)
+
+            elif cat in ('commodity', 'currency'):
+                df[f'{name}_return'] = df[name].pct_change()
+
+        # Cross-source: spread between first two volatility sources
+        if len(vol_sources) >= 2 and all(v in df.columns for v in vol_sources[:2]):
+            df['vix_spread'] = df[vol_sources[1]] - df[vol_sources[0]]
         
-        # Volatility
-        if 'vix' in df.columns:
-            df['vix_change'] = df['vix'].pct_change()
-            df['vix_level'] = df['vix']
-        
-        # ASX200 VIX (local fear gauge)
-        if 'asx_vix' in df.columns:
-            df['asx_vix_change'] = df['asx_vix'].pct_change()
-            df['asx_vix_level'] = df['asx_vix']
-            # Spread: local vs global fear divergence
-            if 'vix' in df.columns:
-                df['vix_spread'] = df['asx_vix'] - df['vix']
-        
-        # Commodity returns
-        for commodity in ['gold', 'copper', 'oil', 'iron_ore_proxy']:
-            if commodity in df.columns:
-                df[f'{commodity}_return'] = df[commodity].pct_change()
-        
-        # Currency
-        if 'audusd' in df.columns:
-            df['audusd_return'] = df['audusd'].pct_change()
-        
-        # Technical indicators
-        df['ema12'] = df['price'].ewm(span=12).mean()
-        df['ema26'] = df['price'].ewm(span=26).mean()
-        df['macd'] = df['ema12'] - df['ema26']
-        df['macd_signal'] = df['macd'].ewm(span=9).mean()
-        df['macd_histogram'] = df['macd'] - df['macd_signal']
-        
-        delta = df['price'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['rsi'] = 100 - (100 / (1 + rs))
+        # ── Config-driven technical indicators ────────────────────
+        indicators = self.config.get('technical_indicators', [
+            {'type': 'macd', 'fast': 12, 'slow': 26, 'signal': 9},
+            {'type': 'rsi', 'period': 14},
+        ])
+        for ind in indicators:
+            ind_type = ind['type']
+            if ind_type == 'macd':
+                fast = ind.get('fast', 12)
+                slow = ind.get('slow', 26)
+                sig = ind.get('signal', 9)
+                df[f'ema{fast}'] = df['price'].ewm(span=fast).mean()
+                df[f'ema{slow}'] = df['price'].ewm(span=slow).mean()
+                df['macd'] = df[f'ema{fast}'] - df[f'ema{slow}']
+                df['macd_signal'] = df['macd'].ewm(span=sig).mean()
+                df['macd_histogram'] = df['macd'] - df['macd_signal']
+            elif ind_type == 'rsi':
+                period = ind.get('period', 14)
+                delta = df['price'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+                rs = gain / loss
+                df[f'rsi_{period}'] = 100 - (100 / (1 + rs))
+            else:
+                self._log(f"⚠ Unknown indicator type: {ind_type}", 'warning')
         
         # When predicting, forward-fill computed features so the live row
         # inherits the latest market returns instead of NaN
@@ -168,8 +176,9 @@ class ModelManager:
         return df
     
     def get_feature_columns(self, df: pd.DataFrame) -> List[str]:
-        """Get list of feature columns (exclude target and identifiers)"""
-        exclude_cols = ['target', 'daily_return', 'price']
+        """Get list of feature columns (exclude target, identifiers, and raw market source columns)"""
+        raw_source_names = {s['name'] for s in self.market_sources}
+        exclude_cols = {'target', 'daily_return', 'price'} | raw_source_names
         return [col for col in df.columns if col not in exclude_cols]
     
     def save_feature_names(self, feature_names: List[str]) -> None:
@@ -247,6 +256,13 @@ class ModelManager:
                 'importance': self.model.feature_importances_
             }).sort_values('importance', ascending=False)
             result["feature_importance"] = importance.head(10).to_dict('records')
+
+            # Log all features ranked by importance
+            self._log("── Feature Importance ──────────────────────", 'info')
+            for rank, row in enumerate(importance.itertuples(), 1):
+                bar = '█' * int(row.importance * 100)
+                self._log(f"  {rank:2d}. {row.feature:<28s} {row.importance:.4f}  {bar}", 'info')
+            self._log("────────────────────────────────────────────", 'info')
             
             # Ensure directory exists before saving
             self._ensure_data_directory()

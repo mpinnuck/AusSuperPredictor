@@ -34,47 +34,60 @@
             "name": "asx_futures",
             "ticker": "8824",
             "source": "investing",
-            "shift": false
+            "shift": false,
+            "category": "futures"
         },
         {
             "name": "sp500_futures",
             "ticker": "ES=F",
-            "shift": false
+            "shift": false,
+            "category": "futures"
         },
         {
             "name": "vix",
             "ticker": "^VIX",
-            "shift": true
+            "shift": true,
+            "category": "volatility"
         },
         {
             "name": "asx_vix",
             "ticker": "^AXVI",
-            "shift": true
+            "shift": true,
+            "category": "volatility"
         },
         {
             "name": "gold",
             "ticker": "GC=F",
-            "shift": true
+            "shift": true,
+            "category": "commodity"
         },
         {
             "name": "copper",
             "ticker": "HG=F",
-            "shift": true
+            "shift": true,
+            "category": "commodity"
         },
         {
             "name": "oil",
             "ticker": "CL=F",
-            "shift": true
+            "shift": true,
+            "category": "commodity"
         },
         {
             "name": "iron_ore_proxy",
             "ticker": "BHP.AX",
-            "shift": false
+            "shift": false,
+            "category": "commodity"
         },
         {
             "name": "audusd",
             "ticker": "AUDUSD=X",
-            "shift": false
+            "shift": false,
+            "category": "currency"
         }
+    ],
+    "technical_indicators": [
+        {"type": "macd", "fast": 12, "slow": 26, "signal": 9},
+        {"type": "rsi", "period": 14}
     ]
 }

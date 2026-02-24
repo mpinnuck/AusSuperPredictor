@@ -36,7 +36,7 @@ from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 
 # Application version
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 APP_NAME = "AusSuperPredictor"
 
@@ -72,15 +72,19 @@ _DEFAULT_CONFIG = {
         "to": ""
     },
     "market_sources": [
-        {"name": "asx_futures", "ticker": "8824", "source": "investing", "shift": False},
-        {"name": "sp500_futures", "ticker": "ES=F", "shift": False},
-        {"name": "vix", "ticker": "^VIX", "shift": True},
-        {"name": "asx_vix", "ticker": "^AXVI", "shift": True},
-        {"name": "gold", "ticker": "GC=F", "shift": True},
-        {"name": "copper", "ticker": "HG=F", "shift": True},
-        {"name": "oil", "ticker": "CL=F", "shift": True},
-        {"name": "iron_ore_proxy", "ticker": "BHP.AX", "shift": False},
-        {"name": "audusd", "ticker": "AUDUSD=X", "shift": False}
+        {"name": "asx_futures", "ticker": "8824", "source": "investing", "shift": False, "category": "futures"},
+        {"name": "sp500_futures", "ticker": "ES=F", "shift": False, "category": "futures"},
+        {"name": "vix", "ticker": "^VIX", "shift": True, "category": "volatility"},
+        {"name": "asx_vix", "ticker": "^AXVI", "shift": True, "category": "volatility"},
+        {"name": "gold", "ticker": "GC=F", "shift": True, "category": "commodity"},
+        {"name": "copper", "ticker": "HG=F", "shift": True, "category": "commodity"},
+        {"name": "oil", "ticker": "CL=F", "shift": True, "category": "commodity"},
+        {"name": "iron_ore_proxy", "ticker": "BHP.AX", "shift": False, "category": "commodity"},
+        {"name": "audusd", "ticker": "AUDUSD=X", "shift": False, "category": "currency"}
+    ],
+    "technical_indicators": [
+        {"type": "macd", "fast": 12, "slow": 26, "signal": 9},
+        {"type": "rsi", "period": 14}
     ]
 }
 
