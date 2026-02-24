@@ -140,7 +140,9 @@ def _setup_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     root_logger.addHandler(handler)
-    logging.info('AusSuperPredictor v%s started  (pid=%s)', VERSION, os.getpid())
+    startup_msg = f'AusSuperPredictor v{VERSION} started  (pid={os.getpid()})'
+    logging.info(startup_msg)
+    print(startup_msg)
 
 
 _setup_logging()
