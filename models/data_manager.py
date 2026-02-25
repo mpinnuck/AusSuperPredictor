@@ -463,77 +463,84 @@ class DataManager:
             self._log(f"⚠ Could not fetch live ASX200 data: {e}", 'warning')
             return None
 
-    def fetch_live_market_quotes(self) -> Dict[str, float]:
-        """Fetch live prices for non-shifted market sources.
+    def fetch_live_market_quotes(self) -> Dict[str, Dict[str, float]]:
+        """
+        Fetch live prices and daily percentage changes for non-shifted sources.
 
         At prediction time (15:45 Sydney) we need current prices for
         instruments that trade live during Australian hours:
-          - futures  (sp500_futures, asx_futures via yfinance)
-          - non-shifted commodities (iron_ore_proxy / BHP.AX)
-          - currency (audusd)
+        - futures (sp500_futures, asx_futures via yfinance or Investing.com)
+        - non-shifted commodities (iron_ore_proxy / BHP.AX)
+        - currency (audusd)
 
         Shifted sources (vix, gold, copper, oil) use yesterday's daily
         close which is already in the historical data — no live fetch needed.
 
-        Returns a dict  {source_name: live_price}.
+        Returns a dict: {source_name: {'price': price, 'pct': pct_change}}
+        where pct_change is the daily percentage change (as a decimal, e.g., 0.0005 for +0.05%).
         """
+        import requests as req
         import yfinance as yf
 
-        quotes: Dict[str, float] = {}
+        quotes = {}
         for src in self.MARKET_SOURCES:
             if src['shift']:
-                continue  # shifted sources don't need live data
+                continue
             name = src['name']
-            ticker_str = src['ticker']
-            source = src.get('source', 'yfinance')
+            live_source = src.get('live_source', src.get('source', 'yfinance'))
+            live_ticker = src.get('live_ticker', src['ticker'])
 
-            # Allow per-source live override (e.g. sp500_futures uses
-            # Investing.com for real-time quotes instead of delayed yfinance)
-            live_source = src.get('live_source', source)
-            live_ticker = src.get('live_ticker', ticker_str)
-
-            # Investing.com sources — use their API
             if live_source == 'investing':
                 try:
                     today = date.today()
-                    series = self._fetch_investing_series(
-                        pair_id=int(live_ticker),
-                        start_date=today - timedelta(days=5),
-                        end_date=today,
+                    # Fetch a small range (last 5 days) to get today's data and previous close
+                    start = today - timedelta(days=5)
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                        'domain-id': 'au',
+                    }
+                    url = (
+                        f"https://api.investing.com/api/financialdata/historical/{live_ticker}"
+                        f"?start-date={start.strftime('%Y-%m-%d')}"
+                        f"&end-date={today.strftime('%Y-%m-%d')}"
+                        f"&time-frame=Daily&add-missing-rows=false"
                     )
-                    if series is not None and not series.empty:
-                        live_px = float(series.iloc[-1])
-                        quotes[name] = live_px
-                        if len(series) >= 2:
-                            prev_px = float(series.iloc[-2])
-                            pct = (live_px - prev_px) / prev_px * 100
-                            self._log(f"✓ Live {name}: {live_px:,.2f} ({pct:+.2f}%)", 'success')
-                        else:
-                            self._log(f"✓ Live {name}: {live_px:,.2f}", 'success')
+                    resp = req.get(url, headers=headers, timeout=30)
+                    resp.raise_for_status()
+                    data = resp.json().get('data', [])
+                    if not data:
+                        self._log(f"⚠ No live data for {name}", 'warning')
+                        continue
+
+                    # Most recent record is first in list
+                    latest = data[0]
+                    live_price = float(latest['last_closeRaw'])
+                    # Use the provided percentage change directly (convert from percent to decimal)
+                    live_pct = float(latest['change_precentRaw']) / 100.0
+                    quotes[name] = {'price': live_price, 'pct': live_pct}
+                    self._log(f"✓ Live {name}: {live_price:,.2f} ({live_pct*100:+.2f}%)", 'success')
                 except Exception as e:
                     self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
                 continue
 
-            # yfinance sources — use fast_info for a quick live quote
+            # yfinance sources
             try:
-                t = yf.Ticker(ticker_str)
+                t = yf.Ticker(live_ticker)
                 info = t.fast_info
                 price = float(info.last_price)
                 prev = float(info.previous_close)
-                if price > 0:
-                    pct = (price - prev) / prev * 100
-                    quotes[name] = price
-                    self._log(
-                        f"✓ Live {name}: {price:,.4f} ({pct:+.2f}%)",
-                        'success',
-                    )
+                if price > 0 and prev > 0:
+                    pct = (price - prev) / prev
+                    quotes[name] = {'price': price, 'pct': pct}
+                    self._log(f"✓ Live {name}: {price:,.4f} ({pct*100:+.2f}%)", 'success')
             except Exception as e:
                 self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
 
         return quotes
-
+    
     def prepare_combined_data_for_prediction(self) -> pd.DataFrame:
-        """Prepare data for prediction with live market prices.
+        """
+        Prepare data for prediction with live market prices and returns.
 
         Pipeline:
         1. Load local AustralianSuper CSV
@@ -541,10 +548,17 @@ class DataManager:
         3. Fetch historical market data and time-align (shift) as in training
         4. Join market data to fund data
         5. Fetch live quotes for non-shifted sources and inject into the
-           live row so that pct_change() in engineer_features computes
-           (live_price − yesterday_settlement) / yesterday_settlement
-           — the same type of return the model was trained on.
-        6. Forward-fill remaining gaps.
+        live row:
+            - Set the raw price column
+            - Also set the corresponding `_return` column using the live
+            percentage change (so it exactly matches what the ticker reports)
+        6. Forward-fill remaining gaps (historical rows + any sources that
+        failed to return a live quote)
+        7. Drop rows missing essential columns (daily_return, price)
+
+        This ensures that the `_return` features for the live row are
+        consistent with the live feed's percentage change, eliminating
+        mismatches caused by differing previous closes between data sources.
         """
         fund_data = self.load_local_data()
         if fund_data.empty:
@@ -569,20 +583,23 @@ class DataManager:
 
         combined = fund_data.join(market_data, how='left')
 
-        # ── Inject live market prices into the live row ──────────────
+        # ── Inject live market prices and returns into the live row ─────
         if live_row is not None and len(combined) > 1:
             live_quotes = self.fetch_live_market_quotes()
-            for col, price in live_quotes.items():
+            for col, data in live_quotes.items():
                 if col in combined.columns:
-                    combined.iloc[-1, combined.columns.get_loc(col)] = price
+                    # Set the raw price
+                    combined.iloc[-1, combined.columns.get_loc(col)] = data['price']
+                    # Set the return feature if it exists
+                    return_col = f"{col}_return"
+                    if return_col in combined.columns and data['pct'] is not None:
+                        combined.iloc[-1, combined.columns.get_loc(return_col)] = data['pct']
 
-        # Forward-fill remaining gaps (historical rows + any sources
-        # that failed to return a live quote)
+        # Forward-fill remaining gaps
         combined = combined.ffill()
 
         combined.dropna(subset=['daily_return', 'price'], inplace=True)
-        return combined
-    
+        return combined    
     # ── Market Regime Classification ──────────────────────────────────
 
     def classify_market_regime(self, lookback: int = 20) -> str:

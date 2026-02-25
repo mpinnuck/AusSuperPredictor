@@ -41,7 +41,8 @@
         },
         {
             "name": "sp500_futures",
-            "ticker": "ES=F",
+            "ticker": "1175153",
+            "source": "investing",
             "shift": false,
             "category": "futures",
             "live_source": "investing",
