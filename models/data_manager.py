@@ -17,7 +17,7 @@ class DataManager:
     # Default market sources (used when config omits the key)
     _DEFAULT_MARKET_SOURCES = [
         {'name': 'asx_futures',    'ticker': '8824',     'source': 'investing', 'shift': False, 'category': 'futures', 'live_source': 'investing', 'live_ticker': '8824'},
-        {'name': 'sp500_futures',  'ticker': 'ES=F',      'shift': False, 'category': 'futures', 'live_source': 'investing', 'live_ticker': '1175153'},
+        {'name': 'sp500_futures',  'ticker': 'ES=F',      'shift': False, 'category': 'futures', 'live_source': 'investing', 'live_ticker': '1175153', 'price_field': 'last_openRaw'},
         {'name': 'vix',            'ticker': '^VIX',      'shift': True,  'category': 'volatility'},
         {'name': 'asx_vix',        'ticker': '^AXVI',     'shift': True,  'category': 'volatility'},
         {'name': 'gold',           'ticker': 'GC=F',      'shift': True,  'category': 'commodity'},
@@ -261,10 +261,15 @@ class DataManager:
 
     def _fetch_investing_series(
         self, pair_id: int, start_date: date, end_date: date,
+        price_field: str = 'last_closeRaw',
     ) -> Optional[pd.Series]:
-        """Fetch daily close prices from the Investing.com historical API.
+        """Fetch daily prices from the Investing.com historical API.
 
-        Returns a datetime-indexed Series of close prices, or None on failure.
+        *price_field* selects which OHLC field to extract, e.g.
+        ``'last_closeRaw'`` (default), ``'last_openRaw'``,
+        ``'last_maxRaw'``, ``'last_minRaw'``.
+
+        Returns a datetime-indexed Series, or None on failure.
         """
         import requests as req
 
@@ -288,9 +293,9 @@ class DataManager:
             if not records:
                 return None
             dates = [pd.Timestamp(r['rowDateTimestamp']) for r in records]
-            closes = [float(r['last_closeRaw']) for r in records]
+            values = [float(r[price_field]) for r in records]
             series = pd.Series(
-                closes,
+                values,
                 index=pd.DatetimeIndex(dates).normalize().tz_localize(None),
             )
             series = series[~series.index.duplicated(keep='first')]
@@ -320,6 +325,7 @@ class DataManager:
                         end_date=end_date.date()
                             if isinstance(end_date, datetime)
                             else end_date,
+                        price_field=src.get('price_field', 'last_closeRaw'),
                     )
                     if close is not None and not close.empty:
                         raw[name] = close
@@ -514,7 +520,8 @@ class DataManager:
 
                     # Most recent record is first in list
                     latest = data[0]
-                    live_price = float(latest['last_closeRaw'])
+                    pf = src.get('price_field', 'last_closeRaw')
+                    live_price = float(latest[pf])
                     # Use the provided percentage change directly (convert from percent to decimal)
                     live_pct = float(latest['change_precentRaw']) / 100.0
                     quotes[name] = {'price': live_price, 'pct': live_pct}

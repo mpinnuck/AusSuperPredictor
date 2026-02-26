@@ -128,8 +128,8 @@ class ModelManager:
 
             if cat == 'futures':
                 df[f'{name}_return'] = df[name].pct_change()
-                # Premium vs yesterday's close for local futures
-                if src.get('source') == 'investing':
+                # Premium vs yesterday's close — only for ASX futures
+                if name == 'asx_futures':
                     yesterday_close = df['price'].shift(1)
                     df['futures_premium'] = df[name] / yesterday_close - 1
 
@@ -138,8 +138,18 @@ class ModelManager:
                 df[f'{name}_level'] = df[name]
                 vol_sources.append(name)
 
+            elif cat == 'bond_yield':
+                df[f'{name}_change'] = df[name].diff()
+                df[f'{name}_level'] = df[name]
+
             elif cat in ('commodity', 'currency'):
                 df[f'{name}_return'] = df[name].pct_change()
+
+        # Cross-source: yield spread (first two bond yield sources)
+        bond_sources = [s['name'] for s in self.market_sources
+                        if s.get('category') == 'bond_yield' and s['name'] in df.columns]
+        if len(bond_sources) >= 2:
+            df['yield_spread'] = df[bond_sources[0]] - df[bond_sources[1]]
 
         # Cross-source: spread between first two volatility sources
         if len(vol_sources) >= 2 and all(v in df.columns for v in vol_sources[:2]):

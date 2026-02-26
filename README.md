@@ -6,8 +6,10 @@ A Python desktop application that predicts the next-day direction of the ASX 200
 
 - **Daily ASX 200 data** sourced from the Investing.com API with accurate daily closes
 - **ASX 200 futures** fetched from Investing.com (pair 8824) for the `futures_premium` feature — measures overnight divergence between futures and the index
-- **8 global market indicators** fetched via yfinance (S&P 500 futures, VIX, ASX VIX, gold, copper, oil, BHP.AX, AUD/USD)
-- **32 engineered features** including lagged returns, technical indicators (RSI, MACD, EMA), volatility metrics, commodity returns, and futures premium
+- **10 global market indicators** fetched via yfinance and Investing.com (S&P 500 futures, VIX, ASX VIX, gold, copper, oil, BHP.AX, AUD/USD, AU 10Y yield, US 10Y yield)
+- **Bond yield features** — yield level, daily change (diff), and AU–US yield spread
+- **Configurable OHLC field** — Investing.com sources support `price_field` to select open/high/low/close per ticker (e.g. `last_openRaw` for S&P futures to avoid look-ahead bias)
+- **42 engineered features** including lagged returns, technical indicators (RSI, MACD, EMA), volatility metrics, commodity returns, futures premium, bond yield spread, and VIX spread
 - **Random Forest classifier** with configurable hyperparameters and 80/20 time-series split
 - **Calibration analysis** — ECE/MCE metrics computed on the test set after each training run
 - **Confidence-based decisions** — predictions are classified as POSITIVE_EXPECTED, NEGATIVE_EXPECTED, or NEUTRAL with confidence levels (VERY_LOW → VERY_HIGH)
@@ -193,13 +195,53 @@ Market sources support two providers:
 
 The `shift` flag controls time-zone alignment: `true` shifts the series forward one day for US-session data so it aligns with ASX trading dates.
 
+#### `price_field` — OHLC selection for Investing.com sources
+
+Investing.com sources can specify which daily OHLC value to use:
+
+| `price_field` value | Description |
+|---|---|
+| `"last_closeRaw"` | Daily close (default if omitted) |
+| `"last_openRaw"` | Daily open |
+| `"last_maxRaw"` | Daily high |
+| `"last_minRaw"` | Daily low |
+
+Example — S&P 500 futures uses the **open** to avoid look-ahead bias (the futures close occurs after the ASX has already closed):
+
+```json
+{
+    "name": "sp500_futures",
+    "ticker": "1175153",
+    "source": "investing",
+    "shift": false,
+    "category": "futures",
+    "price_field": "last_openRaw"
+}
+```
+
+This field is used for both historical data fetching and live prediction quotes.
+
+#### Market source categories
+
+The `category` field controls how features are engineered from each source:
+
+| Category | Features created |
+|---|---|
+| `futures` | `_return` (pct_change), `futures_premium` (vs ASX close) |
+| `volatility` | `_change` (pct_change), `_level`, cross-source `vix_spread` |
+| `bond_yield` | `_change` (diff), `_level`, cross-source `yield_spread` |
+| `commodity` | `_return` (pct_change) |
+| `currency` | `_return` (pct_change) |
+
 ## Data Sources
 
 | Source | Data | Method |
 |--------|------|--------|
 | [Investing.com](https://www.investing.com/indices/s-p-asx-200-historical-data) | ASX 200 daily OHLC | REST API (pair ID 171) |
 | [Investing.com](https://www.investing.com/indices/s-p-asx-200-futures) | ASX 200 Futures | REST API (pair ID 8824) |
-| [Yahoo Finance](https://finance.yahoo.com/) | S&P 500 futures, VIX, ASX VIX, gold, copper, oil, BHP.AX, AUD/USD | yfinance package |
+| [Investing.com](https://www.investing.com/indices/us-spx-500-futures) | S&P 500 Futures | REST API (pair ID 1175153) |
+| [Yahoo Finance](https://finance.yahoo.com/) | VIX, ASX VIX, gold, copper, oil, BHP.AX, AUD/USD | yfinance package |
+| [Investing.com](https://www.investing.com/rates-bonds/) | AU/US 10-year bond yields | REST API (bond pair IDs) |
 | [Yahoo Finance](https://finance.yahoo.com/) | Live ASX 200 intraday price | yfinance `^AXJO` fast_info |
 
 ## Confidence Levels
@@ -216,7 +258,7 @@ The `shift` flag controls time-zone alignment: `true` shifts the series forward 
 
 The app maintains three levels of historical data:
 
-1. **`asx200history.csv`** — every individual prediction with 40+ columns: metadata, all feature inputs, outcome, result label, hypothetical return, market regime, model version
+1. **`asx200history.csv`** — every individual prediction with 50+ columns: metadata, all feature inputs, outcome, result label, hypothetical return, market regime, model version
 2. **`performance_log.csv`** — daily aggregate snapshots: overall accuracy, rolling accuracy, best threshold, drift status
 3. **Performance tab** — live dashboard computed from history on each refresh
 
