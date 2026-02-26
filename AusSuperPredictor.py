@@ -36,7 +36,7 @@ from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 
 # Application version
-VERSION = "3.3.0"
+VERSION = "3.5.0"
 
 APP_NAME = "AusSuperPredictor"
 
@@ -73,7 +73,7 @@ _DEFAULT_CONFIG = {
     },
     "market_sources": [
         {"name": "asx_futures", "ticker": "8824", "source": "investing", "shift": False, "category": "futures", "live_source": "investing", "live_ticker": "8824"},
-        {"name": "sp500_futures", "ticker": "ES=F", "shift": False, "category": "futures", "live_source": "investing", "live_ticker": "1175153"},
+        {"name": "sp500_futures", "ticker": "ES=F", "shift": False, "category": "futures", "live_source": "investing", "live_ticker": "1175153", "price_field": "last_openRaw"},
         {"name": "vix", "ticker": "^VIX", "shift": True, "category": "volatility"},
         {"name": "asx_vix", "ticker": "^AXVI", "shift": True, "category": "volatility"},
         {"name": "gold", "ticker": "GC=F", "shift": True, "category": "commodity"},
