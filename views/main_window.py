@@ -5,6 +5,7 @@ Binds to ViewModel for all business logic
 import os
 import tkinter as tk
 from tkinter import ttk
+from PIL import Image, ImageTk
 from views.log_panel import LogPanel
 from views.performance_panel import PerformancePanel
 from viewmodels.main_viewmodel import MainViewModel
@@ -19,7 +20,7 @@ class MainWindow:
         
         # Window setup
         self.root.title(f"AustralianSuper Next-Day Direction Predictor v{self.version}")
-        self.root.geometry("900x750")
+        self.root.geometry("900x800")
         self.root.minsize(600, 550)
         
         # Center window on screen
@@ -41,9 +42,28 @@ class MainWindow:
         top_frame = ttk.Frame(self.root, padding="10")
         top_frame.pack(fill=tk.BOTH, expand=True)
         
+        # Icon image (above View Data button)
+        icon_frame = ttk.Frame(top_frame)
+        icon_frame.grid(row=0, column=2, rowspan=3, padx=20, pady=10)
+        
+        icon_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'resources', 'asx200predictor.png'
+        )
+        if os.path.exists(icon_path):
+            try:
+                img = Image.open(icon_path)
+                # Resize to 100x100 for display
+                img = img.resize((100, 100), Image.Resampling.LANCZOS)
+                self.icon_photo = ImageTk.PhotoImage(img)
+                icon_label = ttk.Label(icon_frame, image=self.icon_photo)
+                icon_label.pack()
+            except Exception as e:
+                print(f"Could not load icon: {e}")
+        
         # Settings title
         ttk.Label(top_frame, text="Settings", font=('Arial', 14, 'bold')).grid(
-            row=0, column=0, columnspan=4, sticky='w', pady=(0,10))
+            row=1, column=0, columnspan=2, sticky='w', pady=(0,10))
         
         # Countdown display (bound to ViewModel)
         self.countdown_label = ttk.Label(
@@ -52,17 +72,17 @@ class MainWindow:
             font=('Arial', 12, 'bold'), 
             foreground='blue'
         )
-        self.countdown_label.grid(row=1, column=0, columnspan=4, sticky='w', pady=5)
+        self.countdown_label.grid(row=2, column=0, columnspan=2, sticky='w', pady=5)
         
         # Data info
         ttk.Label(top_frame, text="Local data file:").grid(
-            row=2, column=0, sticky='e', padx=5, pady=5)
+            row=3, column=0, sticky='e', padx=5, pady=5)
         self.data_file_label = ttk.Label(
             top_frame, 
             text=os.path.basename(self.viewmodel.config['data']['local_csv_path']), 
             foreground='blue'
         )
-        self.data_file_label.grid(row=2, column=1, sticky='w', padx=5, pady=5)
+        self.data_file_label.grid(row=3, column=1, sticky='w', padx=5, pady=5)
         
         # View Data button (NEW)
         self.view_data_btn = ttk.Button(
@@ -71,27 +91,27 @@ class MainWindow:
             command=self._on_view_data_clicked,
             width=8
         )
-        self.view_data_btn.grid(row=2, column=2, padx=5, pady=5)
+        self.view_data_btn.grid(row=3, column=2, padx=5, pady=5)
         
         # Last update
         ttk.Label(top_frame, text="Last data date:").grid(
-            row=3, column=0, sticky='e', padx=5, pady=5)
+            row=4, column=0, sticky='e', padx=5, pady=5)
         self.last_date_label = ttk.Label(
             top_frame, 
             text=self.viewmodel.last_data_date, 
             foreground='blue'
         )
-        self.last_date_label.grid(row=3, column=1, sticky='w', padx=5, pady=5)
+        self.last_date_label.grid(row=4, column=1, sticky='w', padx=5, pady=5)
         
         # Model info
         ttk.Label(top_frame, text="Model file:").grid(
-            row=4, column=0, sticky='e', padx=5, pady=5)
+            row=5, column=0, sticky='e', padx=5, pady=5)
         self.model_file_label = ttk.Label(
             top_frame, 
             text=os.path.basename(self.viewmodel.config['model']['save_path']), 
             foreground='blue'
         )
-        self.model_file_label.grid(row=4, column=1, sticky='w', padx=5, pady=5)
+        self.model_file_label.grid(row=5, column=1, sticky='w', padx=5, pady=5)
         
         # View Model button (NEW)
         self.view_model_btn = ttk.Button(
@@ -100,16 +120,16 @@ class MainWindow:
             command=self._on_view_model_clicked,
             width=8
         )
-        self.view_model_btn.grid(row=4, column=2, padx=5, pady=5)
+        self.view_model_btn.grid(row=5, column=2, padx=5, pady=5)
         
         # Data folder
         ttk.Label(top_frame, text="Data folder:").grid(
-            row=5, column=0, sticky='e', padx=5, pady=5)
+            row=6, column=0, sticky='e', padx=5, pady=5)
         self.data_folder_var = tk.StringVar(
             value=self.viewmodel.config.get('data_folder', 'data'))
         data_folder_entry = ttk.Entry(
             top_frame, textvariable=self.data_folder_var, width=50)
-        data_folder_entry.grid(row=5, column=1, sticky='ew', padx=5, pady=5)
+        data_folder_entry.grid(row=6, column=1, sticky='ew', padx=5, pady=5)
         data_folder_entry.bind('<Return>', lambda e: self._on_data_folder_changed())
         data_folder_entry.bind('<FocusOut>', lambda e: self._on_data_folder_changed())
         
@@ -119,7 +139,7 @@ class MainWindow:
             command=self._on_browse_data_folder,
             width=8
         )
-        self.browse_btn.grid(row=5, column=2, padx=5, pady=5)
+        self.browse_btn.grid(row=6, column=2, padx=5, pady=5)
 
         # Email settings
         email_creds = self.viewmodel.load_email_credentials()
@@ -131,31 +151,31 @@ class MainWindow:
             top_frame,
             text="Email enabled (emails prediction results when run from command line)",
             variable=self.email_enabled_var,
-        ).grid(row=6, column=1, columnspan=2, sticky='w', padx=5, pady=2)
+        ).grid(row=7, column=1, columnspan=2, sticky='w', padx=5, pady=2)
 
         ttk.Label(top_frame, text="Email user:").grid(
-            row=7, column=0, sticky='e', padx=5, pady=2)
+            row=8, column=0, sticky='e', padx=5, pady=2)
         self.email_user_var = tk.StringVar(
             value=email_creds.get('username') or email_cfg_user)
         email_user_entry = ttk.Entry(
             top_frame, textvariable=self.email_user_var, width=30)
-        email_user_entry.grid(row=7, column=1, sticky='w', padx=5, pady=2)
+        email_user_entry.grid(row=8, column=1, sticky='w', padx=5, pady=2)
 
         ttk.Label(top_frame, text="Email password:").grid(
-            row=8, column=0, sticky='e', padx=5, pady=2)
+            row=9, column=0, sticky='e', padx=5, pady=2)
         self.email_pass_var = tk.StringVar(
             value=email_creds.get('password', ''))
         email_pass_entry = ttk.Entry(
             top_frame, textvariable=self.email_pass_var, width=30, show='•')
-        email_pass_entry.grid(row=8, column=1, sticky='w', padx=5, pady=2)
+        email_pass_entry.grid(row=9, column=1, sticky='w', padx=5, pady=2)
 
         ttk.Label(top_frame, text="Email to:").grid(
-            row=9, column=0, sticky='e', padx=5, pady=2)
+            row=10, column=0, sticky='e', padx=5, pady=2)
         self.email_to_var = tk.StringVar(
             value=email_cfg.get('to', ''))
         email_to_entry = ttk.Entry(
             top_frame, textvariable=self.email_to_var, width=30)
-        email_to_entry.grid(row=9, column=1, sticky='w', padx=5, pady=2)
+        email_to_entry.grid(row=10, column=1, sticky='w', padx=5, pady=2)
 
         self.email_save_btn = ttk.Button(
             top_frame,
@@ -163,11 +183,11 @@ class MainWindow:
             command=self._on_save_email_credentials,
             width=8
         )
-        self.email_save_btn.grid(row=9, column=2, padx=5, pady=2)
+        self.email_save_btn.grid(row=10, column=2, padx=5, pady=2)
 
         # Buttons
         button_frame = ttk.Frame(top_frame)
-        button_frame.grid(row=10, column=0, columnspan=4, pady=10)
+        button_frame.grid(row=11, column=0, columnspan=4, pady=10)
         
         self.update_btn = ttk.Button(
             button_frame, 
@@ -356,7 +376,7 @@ class MainWindow:
         
         # Get window dimensions
         window_width = 900
-        window_height = 750
+        window_height = 900
         
         # Calculate center position
         x = (screen_width // 2) - (window_width // 2)

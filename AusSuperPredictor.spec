@@ -45,6 +45,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='AusSuperPredictor.app',
-    icon=None,
+    icon='resources/asx200predictor.icns',
     bundle_identifier=None,
 )

@@ -35,8 +35,12 @@ data/performance_log.csv
 data/last_training.json
 data/feature_names.txt
 
-# Secrets
+# Secrets & Config
 .env
+config.json
+
+# Icon generation
+resources/asx200predictor.iconset/
 
 # Logs
 *.log
