@@ -382,6 +382,41 @@ class DataManager:
             self._log(f"✗ DataFrame creation failed: {e}", 'error')
             return pd.DataFrame()
 
+    def _ffill_with_staleness_check(
+        self, df: pd.DataFrame, max_stale_days: int = 5,
+    ) -> pd.DataFrame:
+        """Forward-fill NaN values and warn about stale columns.
+
+        For each market-source column, count the maximum consecutive
+        NaN gap that ffill has to bridge.  If any column exceeds
+        *max_stale_days*, log a warning so the user knows the model
+        is using potentially outdated data.
+        """
+        market_cols = [s['name'] for s in self.MARKET_SOURCES
+                       if s['name'] in df.columns]
+        stale: dict = {}  # col → max consecutive NaN gap
+        for col in market_cols:
+            is_nan = df[col].isna()
+            if not is_nan.any():
+                continue
+            # Run-length of consecutive NaNs
+            groups = (is_nan != is_nan.shift()).cumsum()
+            max_gap = is_nan.groupby(groups).sum().max()
+            if max_gap > max_stale_days:
+                stale[col] = int(max_gap)
+
+        filled = df.ffill()
+
+        if stale:
+            parts = [f"{col} ({days}d)" for col, days in
+                     sorted(stale.items(), key=lambda x: -x[1])]
+            self._log(
+                f"⚠ Stale data forward-filled (>{max_stale_days}d gap): "
+                + ", ".join(parts),
+                'warning',
+            )
+        return filled
+
     def _time_align_market(self, market_data: pd.DataFrame) -> pd.DataFrame:
         """Shift non-Australian close prices back one day to remove
         look-ahead bias.  At 15:30 Sydney on day D only the D-1 close
@@ -414,7 +449,7 @@ class DataManager:
         market_data = self._time_align_market(market_data)
 
         combined = fund_data.join(market_data, how='left')
-        combined = combined.ffill()
+        combined = self._ffill_with_staleness_check(combined)
         combined.dropna(inplace=True)
         return combined
     
@@ -602,8 +637,8 @@ class DataManager:
                     if return_col in combined.columns and data['pct'] is not None:
                         combined.iloc[-1, combined.columns.get_loc(return_col)] = data['pct']
 
-        # Forward-fill remaining gaps
-        combined = combined.ffill()
+        # Forward-fill remaining gaps (with staleness warnings)
+        combined = self._ffill_with_staleness_check(combined)
 
         combined.dropna(subset=['daily_return', 'price'], inplace=True)
         return combined    
@@ -1054,27 +1089,48 @@ class DataManager:
         log = pd.read_csv(self.PERF_LOG_PATH)
         return log if not log.empty else None
 
-    def detect_model_drift(self, window: int = 20, drop_pct: float = 0.10) -> bool:
+    def detect_model_drift(
+        self,
+        window: int = 20,
+        drop_pct: float = 0.10,
+        min_total: int = 40,
+        relative_drop: float = 0.20,
+    ) -> bool:
         """Return True if recent accuracy is significantly worse than overall.
+
+        Uses both an absolute and a relative drop check so the signal
+        adapts to the baseline accuracy level.  Also requires a minimum
+        number of total completed predictions before reporting drift,
+        since at low counts a 10-pt absolute drop can easily be noise.
 
         Args:
             window: number of most-recent completed predictions to check
-            drop_pct: accuracy drop that triggers the warning (default 10%)
+            drop_pct: absolute accuracy drop that triggers the warning
+                      (default 0.10 → 10 percentage points)
+            min_total: minimum total completed predictions before drift
+                       detection is trusted (default 40, i.e. 2× window)
+            relative_drop: proportional accuracy drop that triggers the
+                           warning (default 0.20 → 20% relative decline,
+                           e.g. 55% → 44%)
         """
         if not os.path.exists(self.HISTORY_PATH):
             return False
 
         hist = pd.read_csv(self.HISTORY_PATH).dropna(subset=['success'])
-        if len(hist) < window:
+        if len(hist) < max(window, min_total):
             return False
 
         overall = hist['success'].mean()
         recent = hist.tail(window)['success'].mean()
 
-        if recent < overall - drop_pct:
+        abs_drop = overall - recent
+        rel_drop = abs_drop / overall if overall > 0 else 0.0
+
+        if abs_drop >= drop_pct or rel_drop >= relative_drop:
             self._log(
                 f"⚠ Model drift detected! Recent {window} accuracy: "
-                f"{recent:.1%} vs overall: {overall:.1%}",
+                f"{recent:.1%} vs overall: {overall:.1%} "
+                f"(abs drop {abs_drop:.1%}, rel drop {rel_drop:.1%})",
                 'warning',
             )
             return True

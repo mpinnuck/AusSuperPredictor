@@ -75,6 +75,7 @@ def send_prediction_email(config: dict, prediction_data: dict) -> bool:
     pred_date = prediction_data["prediction_date"]
     base_date = prediction_data["base_date"]
     base_price = prediction_data["base_price"]
+    base_return = prediction_data.get("base_return", 0.0)
     confidence = prediction_data["confidence_level"]
     regime = prediction_data["market_regime"]
     model_ver = prediction_data["model_version"]
@@ -93,7 +94,7 @@ def send_prediction_email(config: dict, prediction_data: dict) -> bool:
         f"ASX200 Prediction for {pred_date}",
         f"",
         f"Base date:   {base_date}",
-        f"Base price:  {base_price:,.2f}",
+        f"Base price:  {base_price:,.2f} ({base_return:+.2f}%)",
         f"P(up):       {prob*100:.1f}%",
         f"P(down):     {(1-prob)*100:.1f}%",
         f"Decision:    {dec}",
@@ -141,7 +142,7 @@ def send_prediction_email(config: dict, prediction_data: dict) -> bool:
   <tr><td style="padding:4px 8px"><b>Base date</b></td>
       <td style="padding:4px 8px">{base_date}</td></tr>
   <tr><td style="padding:4px 8px"><b>ASX200 price</b></td>
-      <td style="padding:4px 8px">{base_price:,.2f}</td></tr>
+      <td style="padding:4px 8px">{base_price:,.2f} ({base_return:+.2f}%)</td></tr>
   <tr><td style="padding:4px 8px"><b>P(positive)</b></td>
       <td style="padding:4px 8px;color:{colour};font-weight:bold">{prob*100:.1f}%</td></tr>
   <tr><td style="padding:4px 8px"><b>P(negative)</b></td>

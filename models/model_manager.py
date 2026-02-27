@@ -119,6 +119,20 @@ class ModelManager:
             df[f'return_lag_{lag}'] = df['daily_return'].shift(lag)
         
         # ── Config-driven market-source features ──────────────────────
+        # When predicting, the caller may have pre-injected live return
+        # values into the last row.  Capture them *before* pct_change()
+        # overwrites the column so we can restore them afterwards.
+        _live_overrides: dict = {}  # col_name → value
+        if for_prediction:
+            live_idx = df.index[-1]
+            for src in self.market_sources:
+                name = src['name']
+                cat = src.get('category', 'commodity')
+                for suffix in ('_return', '_change'):
+                    col = f'{name}{suffix}'
+                    if col in df.columns and pd.notna(df.at[live_idx, col]):
+                        _live_overrides[col] = df.at[live_idx, col]
+
         vol_sources = []  # track volatility sources for cross-feature
         for src in self.market_sources:
             name = src['name']
@@ -144,6 +158,13 @@ class ModelManager:
 
             elif cat in ('commodity', 'currency'):
                 df[f'{name}_return'] = df[name].pct_change()
+
+        # Restore pre-injected live returns that pct_change() just overwrote
+        if _live_overrides:
+            live_idx = df.index[-1]
+            for col, val in _live_overrides.items():
+                if col in df.columns:
+                    df.at[live_idx, col] = val
 
         # Cross-source: yield spread (first two bond yield sources)
         bond_sources = [s['name'] for s in self.market_sources

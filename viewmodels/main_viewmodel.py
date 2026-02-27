@@ -413,8 +413,7 @@ class MainViewModel:
                     predicted_up = 1 if prob > 0.5 else 0
                     
                     self.log_queue.put(f"\n{'='*50}", 'info')
-                    self.log_queue.put(f"ASX200 latest price: {latest_price:,.2f} ({latest_date_str})", 'info')
-                    self.log_queue.put(f"Latest daily return: {latest_return:+.2f}%", 'info')
+                    self.log_queue.put(f"ASX200: {latest_price:,.2f} ({latest_date_str}) {latest_return:+.2f}%", 'info')
                     self.log_queue.put(f"Prediction for: {prediction_date_str}", 'info')
                     self.log_queue.put(f"Probability of POSITIVE return: {prob*100:.1f}%", 
                                       'success' if prob>0.5 else 'info')
@@ -597,6 +596,7 @@ class MainViewModel:
             prob = decision['probability']
             latest_date = combined.index[-1]
             latest_price = combined['price'].iloc[-1]
+            latest_return = combined['daily_return'].iloc[-1]
 
             from datetime import timedelta
             next_day = latest_date + timedelta(days=1)
@@ -604,7 +604,7 @@ class MainViewModel:
                 next_day += timedelta(days=1)
 
             predicted_up = 1 if prob > 0.5 else 0
-            self.log_queue.put(f"ASX200: {latest_price:,.2f} ({latest_date.strftime('%Y-%m-%d')})", 'info')
+            self.log_queue.put(f"Live ASX200: {latest_price:,.2f} ({latest_return:+.2f}%) as of {latest_date.strftime('%Y-%m-%d')}", 'info')
             self.log_queue.put(f"Prediction for {next_day.strftime('%Y-%m-%d')}: "
                                f"P(up)={prob*100:.1f}%  {decision['decision']}", 'info')
             self.log_queue.put(f"Confidence: {decision['confidence_level']}", 'info')
@@ -632,6 +632,7 @@ class MainViewModel:
                     "prediction_date": next_day.strftime('%Y-%m-%d'),
                     "base_date": latest_date.strftime('%Y-%m-%d'),
                     "base_price": latest_price,
+                    "base_return": latest_return,
                     "probability": prob,
                     "decision": decision['decision'],
                     "confidence_level": decision['confidence_level'],
