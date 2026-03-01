@@ -440,9 +440,13 @@ class MainViewModel:
                         val = fd['value']
                         imp = fd['importance']
                         name = fd['name']
-                        is_pct = ('return' in name or 'change' in name
-                                  or 'premium' in name)
-                        if is_pct:
+                        is_yield_chg = 'yield' in name and 'change' in name
+                        is_pct = (not is_yield_chg and
+                                  ('return' in name or 'change' in name
+                                   or 'premium' in name))
+                        if is_yield_chg:
+                            val_str = f"{val:>+11.4f}"
+                        elif is_pct:
                             val_str = f"{val*100:>+10.2f}%"
                         else:
                             val_str = f"{val:>11.4f}"

@@ -525,7 +525,10 @@ class DataManager:
 
         quotes = {}
         for src in self.MARKET_SOURCES:
-            if src['shift']:
+            # Skip shifted sources unless they have an explicit live_source
+            # (e.g. bond yields are shifted for training but need live data
+            # at prediction time)
+            if src['shift'] and 'live_source' not in src:
                 continue
             name = src['name']
             live_source = src.get('live_source', src.get('source', 'yfinance'))
@@ -533,36 +536,105 @@ class DataManager:
 
             if live_source == 'investing':
                 try:
-                    today = date.today()
-                    # Fetch a small range (last 5 days) to get today's data and previous close
-                    start = today - timedelta(days=5)
-                    headers = {
-                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-                        'domain-id': 'au',
-                    }
-                    url = (
-                        f"https://api.investing.com/api/financialdata/historical/{live_ticker}"
-                        f"?start-date={start.strftime('%Y-%m-%d')}"
-                        f"&end-date={today.strftime('%Y-%m-%d')}"
-                        f"&time-frame=Daily&add-missing-rows=false"
-                    )
-                    resp = req.get(url, headers=headers, timeout=30)
-                    resp.raise_for_status()
-                    data = resp.json().get('data', [])
-                    if not data:
-                        self._log(f"⚠ No live data for {name}", 'warning')
-                        continue
+                    import re as _re
 
-                    # Most recent record is first in list
-                    latest = data[0]
-                    pf = src.get('price_field', 'last_closeRaw')
-                    live_price = float(latest[pf])
-                    # Use the provided percentage change directly (convert from percent to decimal)
-                    live_pct = float(latest['change_precentRaw']) / 100.0
-                    quotes[name] = {'price': live_price, 'pct': live_pct}
-                    self._log(f"✓ Live {name}: {live_price:,.2f} ({live_pct*100:+.2f}%)", 'success')
+                    live_price = None
+                    live_pct = None
+                    live_chg = None  # absolute change (for bond yield diff)
+
+                    # ── 1. Primary: scrape investing.com instrument page ──
+                    # The page embeds JSON with the real-time derived
+                    # price, change and change% (settlement-referenced,
+                    # matching the website display exactly).
+                    live_page = src.get('live_page')
+                    if live_page:
+                        page_url = f"https://au.investing.com{live_page}?cid={live_ticker}"
+                        page_headers = {
+                            'User-Agent': (
+                                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                                'Chrome/120.0.0.0 Safari/537.36'
+                            ),
+                        }
+                        page_resp = req.get(page_url, headers=page_headers, timeout=15)
+                        page_resp.raise_for_status()
+                        html = page_resp.text
+
+                        m = _re.search(
+                            r'"fiftyTwoWeekHigh":[^}]*?"last":([\d.]+),'
+                            r'"changePcr":([-\d.]+),'
+                            r'"change":([-\d.]+)',
+                            html,
+                        )
+                        if m:
+                            live_price = float(m.group(1))
+                            live_pct = float(m.group(2)) / 100.0
+                            live_chg = float(m.group(3))  # absolute change
+                            self._log(
+                                f"✓ Live {name}: {live_price:,.4f} "
+                                f"({live_pct*100:+.2f}%) [page]",
+                                'success',
+                            )
+
+                    # ── 2. Fallback: chart + daily API ─────────────────
+                    if live_price is None:
+                        api_headers = {
+                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                            'domain-id': 'au',
+                        }
+                        chart_url = (
+                            f"https://api.investing.com/api/financialdata/{live_ticker}"
+                            f"/historical/chart/?period=P1D&interval=PT5M&pointscount=60"
+                        )
+                        chart_resp = req.get(chart_url, headers=api_headers, timeout=15)
+                        chart_resp.raise_for_status()
+                        candles = chart_resp.json().get('data', [])
+
+                        today = date.today()
+                        start = today - timedelta(days=5)
+                        daily_url = (
+                            f"https://api.investing.com/api/financialdata/historical/{live_ticker}"
+                            f"?start-date={start.strftime('%Y-%m-%d')}"
+                            f"&end-date={today.strftime('%Y-%m-%d')}"
+                            f"&time-frame=Daily&add-missing-rows=false"
+                        )
+                        daily_resp = req.get(daily_url, headers=api_headers, timeout=15)
+                        daily_resp.raise_for_status()
+                        daily_data = daily_resp.json().get('data', [])
+
+                        if not candles and not daily_data:
+                            self._log(f"⚠ No live data for {name}", 'warning')
+                            continue
+
+                        if candles:
+                            live_price = float(candles[-1][4])
+                        else:
+                            pf = src.get('price_field', 'last_closeRaw')
+                            live_price = float(daily_data[0][pf])
+
+                        pf = src.get('price_field', 'last_closeRaw')
+                        if len(daily_data) >= 2:
+                            prev_price = float(daily_data[1][pf])
+                        elif daily_data:
+                            prev_price = float(daily_data[0][pf])
+                        else:
+                            prev_price = live_price
+                        live_pct = (live_price - prev_price) / prev_price if prev_price else 0.0
+                        self._log(
+                            f"✓ Live {name}: {live_price:,.4f} "
+                            f"({live_pct*100:+.2f}%) [api fallback]",
+                            'success',
+                        )
+
+                    quotes[name] = {
+                        'price': live_price,
+                        'pct': live_pct,
+                        'chg': live_chg,
+                        'category': src.get('category', 'commodity'),
+                    }
                 except Exception as e:
                     self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
+
                 continue
 
             # yfinance sources
@@ -573,7 +645,12 @@ class DataManager:
                 prev = float(info.previous_close)
                 if price > 0 and prev > 0:
                     pct = (price - prev) / prev
-                    quotes[name] = {'price': price, 'pct': pct}
+                    quotes[name] = {
+                        'price': price,
+                        'pct': pct,
+                        'chg': None,
+                        'category': src.get('category', 'commodity'),
+                    }
                     self._log(f"✓ Live {name}: {price:,.4f} ({pct*100:+.2f}%)", 'success')
             except Exception as e:
                 self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
@@ -589,8 +666,9 @@ class DataManager:
         2. Append today's live ASX200 row (price + daily_return)
         3. Fetch historical market data and time-align (shift) as in training
         4. Join market data to fund data
-        5. Fetch live quotes for non-shifted sources and inject into the
-        live row:
+        5. Fetch live quotes for non-shifted sources (and shifted sources
+        that have an explicit live_source, e.g. bond yields) and inject
+        into the live row:
             - Set the raw price column
             - Also set the corresponding `_return` column using the live
             percentage change (so it exactly matches what the ticker reports)
@@ -626,16 +704,38 @@ class DataManager:
         combined = fund_data.join(market_data, how='left')
 
         # ── Inject live market prices and returns into the live row ─────
+        # The derived feature columns (_return, _change, _level) are
+        # created later by engineer_features().  Pre-create them here
+        # with the live values so that engineer_features' _live_overrides
+        # mechanism can capture them before pct_change()/diff() runs,
+        # then restore them afterwards.
         if live_row is not None and len(combined) > 1:
             live_quotes = self.fetch_live_market_quotes()
-            for col, data in live_quotes.items():
+            for col, qdata in live_quotes.items():
                 if col in combined.columns:
                     # Set the raw price
-                    combined.iloc[-1, combined.columns.get_loc(col)] = data['price']
-                    # Set the return feature if it exists
-                    return_col = f"{col}_return"
-                    if return_col in combined.columns and data['pct'] is not None:
-                        combined.iloc[-1, combined.columns.get_loc(return_col)] = data['pct']
+                    combined.iloc[-1, combined.columns.get_loc(col)] = qdata['price']
+
+                    cat = qdata.get('category', 'commodity')
+
+                    if cat == 'futures' and qdata.get('pct') is not None:
+                        ret_col = f"{col}_return"
+                        if ret_col not in combined.columns:
+                            combined[ret_col] = float('nan')
+                        combined.iloc[-1, combined.columns.get_loc(ret_col)] = qdata['pct']
+
+                    elif cat == 'bond_yield':
+                        chg_col = f"{col}_change"
+                        if qdata.get('chg') is not None:
+                            if chg_col not in combined.columns:
+                                combined[chg_col] = float('nan')
+                            combined.iloc[-1, combined.columns.get_loc(chg_col)] = qdata['chg']
+
+                    elif cat in ('commodity', 'currency') and qdata.get('pct') is not None:
+                        ret_col = f"{col}_return"
+                        if ret_col not in combined.columns:
+                            combined[ret_col] = float('nan')
+                        combined.iloc[-1, combined.columns.get_loc(ret_col)] = qdata['pct']
 
         # Forward-fill remaining gaps (with staleness warnings)
         combined = self._ffill_with_staleness_check(combined)

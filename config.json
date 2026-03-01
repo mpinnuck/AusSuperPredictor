@@ -37,7 +37,8 @@
             "shift": false,
             "category": "futures",
             "live_source": "investing",
-            "live_ticker": "8824"
+            "live_ticker": "8824",
+            "live_page": "/indices/australia-200-futures"
         },
         {
             "name": "sp500_futures",
@@ -47,7 +48,8 @@
             "category": "futures",
             "live_source": "investing",
             "live_ticker": "1175153",
-            "price_field": "last_openRaw"
+            "price_field": "last_openRaw",
+            "live_page": "/indices/us-spx-500-futures"
         },
         {
             "name": "vix",
@@ -89,25 +91,30 @@
             "name": "audusd",
             "ticker": "AUDUSD=X",
             "shift": false,
-            "category": "currency"
+            "category": "currency",
+            "live_source": "investing",
+            "live_ticker": "5",
+            "live_page": "/currencies/aud-usd"
         },
         {
             "name": "au_10y_yield",
+            "ticker": "23706",
+            "source": "investing",
+            "shift": true,
+            "category": "bond_yield",
+            "live_source": "investing",
+            "live_ticker": "23878",
+            "live_page": "/rates-bonds/australia-10-year-bond-yield"
+        },
+        {
+            "name": "us_10y_yield",
             "ticker": "23705",
             "source": "investing",
             "shift": true,
             "category": "bond_yield",
             "live_source": "investing",
-            "live_ticker": "23705"
-        },
-        {
-            "name": "us_10y_yield",
-            "ticker": "23693",
-            "source": "investing",
-            "shift": true,
-            "category": "bond_yield",
-            "live_source": "investing",
-            "live_ticker": "23693"
+            "live_ticker": "23705",
+            "live_page": "/rates-bonds/u.s.-10-year-bond-yield"
         }
     ],
     "technical_indicators": [

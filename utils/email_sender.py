@@ -108,8 +108,10 @@ def send_prediction_email(config: dict, prediction_data: dict) -> bool:
         val = fd["value"]
         imp = fd["importance"]
         name = fd["name"]
-        is_pct = ('return' in name or 'change' in name
-                  or 'premium' in name or name == 'macd_histogram')
+        is_yield_chg = 'yield' in name and 'change' in name
+        is_pct = (not is_yield_chg and
+                  ('return' in name or 'change' in name
+                   or 'premium' in name or name == 'macd_histogram'))
         if is_pct:
             plain_lines.append(f"  {name:<28} {val*100:>+10.2f}%  imp {imp:.4f}")
         else:
@@ -122,8 +124,10 @@ def send_prediction_email(config: dict, prediction_data: dict) -> bool:
         val = fd["value"]
         imp = fd["importance"]
         name = fd["name"]
-        is_pct = ('return' in name or 'change' in name
-                  or 'premium' in name or name == 'macd_histogram')
+        is_yield_chg = 'yield' in name and 'change' in name
+        is_pct = (not is_yield_chg and
+                  ('return' in name or 'change' in name
+                   or 'premium' in name or name == 'macd_histogram'))
         if is_pct:
             val_str = f"{val*100:+.2f}%"
         else:
