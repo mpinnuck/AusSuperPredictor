@@ -117,7 +117,21 @@ class ModelManager:
         # Lagged returns
         for lag in [1, 2, 3, 5]:
             df[f'return_lag_{lag}'] = df['daily_return'].shift(lag)
-        
+
+        # ── Consecutive positive-day streak ───────────────────────────
+        # Count how many consecutive positive return days end at each row.
+        # Historically, reversal probability shifts notably after 6-7 days.
+        positive = (df['daily_return'] > 0).astype(int).values
+        streak = np.zeros(len(positive), dtype=int)
+        count = 0
+        for i in range(len(positive)):
+            if positive[i] == 1:
+                count += 1
+            else:
+                count = 0
+            streak[i] = count
+        df['positive_streak'] = streak
+
         # ── Config-driven market-source features ──────────────────────
         # When predicting, the caller may have pre-injected live return
         # values into the last row.  Capture them *before* pct_change()
