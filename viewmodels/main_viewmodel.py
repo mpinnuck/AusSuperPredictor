@@ -290,9 +290,10 @@ class MainViewModel:
                     # ── Show delta comparison with previous model
                     if prev:
                         self.log_queue.put("\n── Changes from previous model ──", 'info')
-                        # Accuracy delta
-                        d_train = result['train_accuracy'] - prev.get('train_accuracy', 0)
-                        d_test = result['test_accuracy'] - prev.get('test_accuracy', 0)
+                        # Accuracy delta (round to display precision to avoid
+                        # floating-point noise colouring zero-deltas red/green)
+                        d_train = round(result['train_accuracy'] - prev.get('train_accuracy', 0), 3)
+                        d_test = round(result['test_accuracy'] - prev.get('test_accuracy', 0), 3)
                         self.log_queue.put(
                             f"  Train acc: {d_train:+.3f}  Test acc: {d_test:+.3f}",
                             'success' if d_test > 0 else ('error' if d_test < 0 else 'info'),
@@ -300,8 +301,8 @@ class MainViewModel:
                         # ECE/MCE delta
                         prev_cal = prev.get('calibration')
                         if cal and prev_cal:
-                            d_ece = cal['expected_calibration_error'] - prev_cal.get('ece', 0)
-                            d_mce = cal['max_calibration_error'] - prev_cal.get('mce', 0)
+                            d_ece = round(cal['expected_calibration_error'] - prev_cal.get('ece', 0), 4)
+                            d_mce = round(cal['max_calibration_error'] - prev_cal.get('mce', 0), 4)
                             self.log_queue.put(
                                 f"  ECE: {d_ece:+.4f}  MCE: {d_mce:+.4f}",
                                 'success' if d_ece < 0 else ('error' if d_ece > 0 else 'info'),
