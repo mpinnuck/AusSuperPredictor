@@ -63,7 +63,7 @@
         {
             "name": "asx_vix",
             "ticker": "^AXVI",
-            "shift": true,
+            "shift": false,
             "category": "volatility"
         },
         {
@@ -123,7 +123,7 @@
             "name": "au_10y_yield",
             "ticker": "23878",
             "source": "investing",
-            "shift": true,
+            "shift": false,
             "category": "bond_yield",
             "live_source": "investing",
             "live_ticker": "23878",
