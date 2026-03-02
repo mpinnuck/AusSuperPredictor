@@ -44,18 +44,21 @@
             "name": "sp500_futures",
             "ticker": "1175153",
             "source": "investing",
-            "shift": false,
+            "price_field": "last_openRaw",
+            "shift": true,
             "category": "futures",
             "live_source": "investing",
             "live_ticker": "1175153",
-            "price_field": "last_openRaw",
             "live_page": "/indices/us-spx-500-futures"
         },
         {
             "name": "vix",
             "ticker": "^VIX",
             "shift": true,
-            "category": "volatility"
+            "category": "volatility",
+            "live_source": "investing",
+            "live_ticker": "44336",
+            "live_page": "/indices/volatility-s-p-500"
         },
         {
             "name": "asx_vix",
@@ -66,20 +69,40 @@
         {
             "name": "gold",
             "ticker": "GC=F",
+            "price_field": "last_openRaw",
             "shift": true,
-            "category": "commodity"
+            "category": "commodity",
+            "live_source": "investing",
+            "live_ticker": "8830",
+            "live_page": "/commodities/gold"
         },
         {
             "name": "copper",
             "ticker": "HG=F",
+            "price_field": "last_openRaw",
             "shift": true,
-            "category": "commodity"
+            "category": "commodity",
+            "live_source": "investing",
+            "live_ticker": "8831",
+            "live_page": "/commodities/copper"
         },
         {
             "name": "oil",
             "ticker": "CL=F",
+            "price_field": "last_openRaw",
             "shift": true,
-            "category": "commodity"
+            "category": "commodity",
+            "live_source": "investing",
+            "live_ticker": "8849",
+            "live_page": "/commodities/crude-oil"
+        },
+        {
+            "name": "oil_vix",
+            "ticker": "^OVX",
+            "shift": true,
+            "category": "volatility",
+            "live_source": "investing",
+            "live_page": "/indices/cboe-crude-oil-volatility"
         },
         {
             "name": "iron_ore_proxy",
@@ -98,7 +121,7 @@
         },
         {
             "name": "au_10y_yield",
-            "ticker": "23706",
+            "ticker": "23878",
             "source": "investing",
             "shift": true,
             "category": "bond_yield",
@@ -110,6 +133,7 @@
             "name": "us_10y_yield",
             "ticker": "23705",
             "source": "investing",
+            "price_field": "last_openRaw",
             "shift": true,
             "category": "bond_yield",
             "live_source": "investing",

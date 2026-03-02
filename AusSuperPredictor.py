@@ -36,7 +36,7 @@ from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 
 # Application version
-VERSION = "4.0.0"
+VERSION = "4.1.0"
 
 APP_NAME = "AusSuperPredictor"
 
@@ -187,7 +187,7 @@ def run_cli(args):
             ok = False
 
     if args.predict or args.all:
-        success = viewmodel.run_predict()
+        success = viewmodel.run_predict(event_notes=args.event)
         _flush_log(viewmodel)
         if not success:
             ok = False
@@ -214,6 +214,8 @@ if __name__ == "__main__":
     parser.add_argument('--train', action='store_true', help='Train model (headless, no GUI)')
     parser.add_argument('--predict', action='store_true', help='Run prediction (headless, no GUI)')
     parser.add_argument('--all', action='store_true', help='Train then predict (headless, no GUI)')
+    parser.add_argument('--event', type=str, default='',
+                        help='Flag an external event (e.g. "Iran war") to annotate the prediction')
 
     args = parser.parse_args()
 

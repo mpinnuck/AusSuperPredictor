@@ -17,12 +17,13 @@ class DataManager:
     # Default market sources (used when config omits the key)
     _DEFAULT_MARKET_SOURCES = [
         {'name': 'asx_futures',    'ticker': '8824',     'source': 'investing', 'shift': False, 'category': 'futures', 'live_source': 'investing', 'live_ticker': '8824'},
-        {'name': 'sp500_futures',  'ticker': 'ES=F',      'shift': False, 'category': 'futures', 'live_source': 'investing', 'live_ticker': '1175153', 'price_field': 'last_openRaw'},
-        {'name': 'vix',            'ticker': '^VIX',      'shift': True,  'category': 'volatility'},
+        {'name': 'sp500_futures',  'ticker': 'ES=F',      'price_field': 'last_openRaw', 'shift': True,  'category': 'futures', 'live_source': 'investing', 'live_ticker': '1175153'},
+        {'name': 'vix',            'ticker': '^VIX',      'shift': True,  'category': 'volatility', 'live_source': 'investing', 'live_ticker': '44336', 'live_page': '/indices/volatility-s-p-500'},
         {'name': 'asx_vix',        'ticker': '^AXVI',     'shift': True,  'category': 'volatility'},
-        {'name': 'gold',           'ticker': 'GC=F',      'shift': True,  'category': 'commodity'},
-        {'name': 'copper',         'ticker': 'HG=F',      'shift': True,  'category': 'commodity'},
-        {'name': 'oil',            'ticker': 'CL=F',      'shift': True,  'category': 'commodity'},
+        {'name': 'gold',           'ticker': 'GC=F',      'price_field': 'last_openRaw', 'shift': True,  'category': 'commodity', 'live_source': 'investing', 'live_ticker': '8830', 'live_page': '/commodities/gold'},
+        {'name': 'copper',         'ticker': 'HG=F',      'price_field': 'last_openRaw', 'shift': True,  'category': 'commodity', 'live_source': 'investing', 'live_ticker': '8831', 'live_page': '/commodities/copper'},
+        {'name': 'oil',            'ticker': 'CL=F',      'price_field': 'last_openRaw', 'shift': True,  'category': 'commodity', 'live_source': 'investing', 'live_ticker': '8849', 'live_page': '/commodities/crude-oil'},
+        {'name': 'oil_vix',        'ticker': '^OVX',      'shift': True,  'category': 'volatility', 'live_source': 'investing', 'live_page': '/indices/cboe-crude-oil-volatility'},
         {'name': 'iron_ore_proxy', 'ticker': 'BHP.AX',    'shift': False, 'category': 'commodity'},
         {'name': 'audusd',         'ticker': 'AUDUSD=X',  'shift': False, 'category': 'currency'},
     ]
@@ -332,13 +333,23 @@ class DataManager:
                     else:
                         self._log(f"⚠ {name} (investing:{ticker}) returned empty data", 'warning')
                 else:
+                    # Map price_field to yfinance OHLCV column
+                    yf_col_map = {
+                        'last_openRaw': 'Open',
+                        'last_closeRaw': 'Close',
+                        'last_maxRaw': 'High',
+                        'last_minRaw': 'Low',
+                    }
+                    pf = src.get('price_field', 'last_closeRaw')
+                    yf_col = yf_col_map.get(pf, 'Close')
+
                     data = yf.download(ticker, start=self.start_date,
                                        end=end_date, progress=False)
                     # Handle MultiIndex columns from yfinance
                     if isinstance(data.columns, pd.MultiIndex):
                         data.columns = data.columns.get_level_values(0)
-                    if not data.empty and 'Close' in data.columns:
-                        close = data['Close']
+                    if not data.empty and yf_col in data.columns:
+                        close = data[yf_col]
                         # yfinance may return MultiIndex → squeeze to 1-D Series
                         if isinstance(close, pd.DataFrame):
                             close = close.squeeze(axis=1)
@@ -532,7 +543,7 @@ class DataManager:
                 continue
             name = src['name']
             live_source = src.get('live_source', src.get('source', 'yfinance'))
-            live_ticker = src.get('live_ticker', src['ticker'])
+            live_ticker = src.get('live_ticker')  # None if not explicitly set
 
             if live_source == 'investing':
                 try:
@@ -548,7 +559,10 @@ class DataManager:
                     # matching the website display exactly).
                     live_page = src.get('live_page')
                     if live_page:
-                        page_url = f"https://au.investing.com{live_page}?cid={live_ticker}"
+                        if live_ticker:
+                            page_url = f"https://au.investing.com{live_page}?cid={live_ticker}"
+                        else:
+                            page_url = f"https://au.investing.com{live_page}"
                         page_headers = {
                             'User-Agent': (
                                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -577,7 +591,7 @@ class DataManager:
                             )
 
                     # ── 2. Fallback: chart + daily API ─────────────────
-                    if live_price is None:
+                    if live_price is None and live_ticker:
                         api_headers = {
                             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
                             'domain-id': 'au',
@@ -626,12 +640,15 @@ class DataManager:
                             'success',
                         )
 
-                    quotes[name] = {
-                        'price': live_price,
-                        'pct': live_pct,
-                        'chg': live_chg,
-                        'category': src.get('category', 'commodity'),
-                    }
+                    if live_price is not None:
+                        quotes[name] = {
+                            'price': live_price,
+                            'pct': live_pct,
+                            'chg': live_chg,
+                            'category': src.get('category', 'commodity'),
+                        }
+                    else:
+                        self._log(f"⚠ No live data for {name}", 'warning')
                 except Exception as e:
                     self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
 
@@ -639,7 +656,8 @@ class DataManager:
 
             # yfinance sources
             try:
-                t = yf.Ticker(live_ticker)
+                yf_ticker = live_ticker or src['ticker']
+                t = yf.Ticker(yf_ticker)
                 info = t.fast_info
                 price = float(info.last_price)
                 prev = float(info.previous_close)
@@ -951,6 +969,7 @@ class DataManager:
         feature_details: list,
         model_version: str = 'unknown',
         market_regime: str = 'UNKNOWN',
+        event_notes: str = '',
     ) -> None:
         """Append one prediction row to the history CSV.
 
@@ -958,6 +977,10 @@ class DataManager:
         ``ModelManager.predict()`` — each with *name*, *value*, *importance*.
         All feature values are stored as individual columns so you can
         inspect exactly what the model saw.
+
+        ``event_notes`` is an optional free-text field for flagging
+        geopolitical events or other external factors not captured by
+        the model's market indicators.
         """
         row = {
             'prediction_date': prediction_date,
@@ -970,6 +993,7 @@ class DataManager:
             'confidence_level': confidence_level,
             'model_version': model_version,
             'market_regime': market_regime,
+            'event_notes': event_notes,
         }
 
         # Add every feature value as its own column
@@ -985,7 +1009,7 @@ class DataManager:
         new_row = pd.DataFrame([row])
         # Ensure string columns stay as object dtype so concat doesn't fail
         for col in ('result_label', 'signal', 'confidence_level',
-                     'market_regime', 'model_version'):
+                     'market_regime', 'model_version', 'event_notes'):
             if col in new_row.columns:
                 new_row[col] = new_row[col].astype(object)
 

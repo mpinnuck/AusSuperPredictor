@@ -337,12 +337,13 @@ class MainViewModel:
         thread.daemon = True
         thread.start()
     
-    def predict_async(self, callback=None):
+    def predict_async(self, callback=None, event_notes: str = ''):
         """Start asynchronous prediction"""
         if self.is_predicting:
             return
         
         self.is_predicting = True
+        self._pending_event_notes = event_notes
         if self.on_state_changed:
             self.on_state_changed()
         
@@ -459,6 +460,14 @@ class MainViewModel:
                     market_reg = self.data_manager.classify_market_regime()
                     self.log_queue.put(f"Market regime: {market_reg}  |  Model version: {model_ver}", 'info')
 
+                    event_notes = getattr(self, '_pending_event_notes', '')
+                    if event_notes:
+                        self.log_queue.put(f"⚠ EVENT FLAG: {event_notes}", 'warning')
+                        self.log_queue.put(
+                            "⚠ External event flagged — prediction may not account for this",
+                            'warning',
+                        )
+
                     self.data_manager.save_prediction_to_history(
                         prediction_date=prediction_date_str,
                         base_date=latest_date_str,
@@ -470,6 +479,7 @@ class MainViewModel:
                         feature_details=feature_details,
                         model_version=model_ver,
                         market_regime=market_reg,
+                        event_notes=event_notes,
                     )
 
                     # ── Step 4: save daily performance snapshot
@@ -560,7 +570,7 @@ class MainViewModel:
             self.log_queue.put(f"Error: {e}", 'error')
             return False
 
-    def run_predict(self) -> bool:
+    def run_predict(self, event_notes: str = '') -> bool:
         """Run update + predict synchronously (for CLI / cron). Returns True on success."""
         try:
             self.log_queue.put("Starting data update...", 'info')
@@ -617,6 +627,9 @@ class MainViewModel:
             market_reg = self.data_manager.classify_market_regime()
             self.log_queue.put(f"Regime: {market_reg}  Model: {model_ver}", 'info')
 
+            if event_notes:
+                self.log_queue.put(f"⚠ EVENT FLAG: {event_notes}", 'warning')
+
             self.data_manager.save_prediction_to_history(
                 prediction_date=next_day.strftime('%Y-%m-%d'),
                 base_date=latest_date.strftime('%Y-%m-%d'),
@@ -628,6 +641,7 @@ class MainViewModel:
                 feature_details=decision['feature_details'],
                 model_version=model_ver,
                 market_regime=market_reg,
+                event_notes=event_notes,
             )
 
             # Email prediction results

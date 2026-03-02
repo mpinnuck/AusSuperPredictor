@@ -185,9 +185,23 @@ class MainWindow:
         )
         self.email_save_btn.grid(row=10, column=2, padx=5, pady=2)
 
+        # Event notes (geopolitical / external event flags)
+        ttk.Label(top_frame, text="Event notes:").grid(
+            row=11, column=0, sticky='e', padx=5, pady=2)
+        self.event_notes_var = tk.StringVar()
+        event_notes_entry = ttk.Entry(
+            top_frame, textvariable=self.event_notes_var, width=50)
+        event_notes_entry.grid(row=11, column=1, sticky='ew', padx=5, pady=2)
+        ttk.Label(
+            top_frame,
+            text="⚠ Flag external events (e.g. war, crisis)",
+            foreground='gray',
+            font=('Arial', 9),
+        ).grid(row=11, column=2, sticky='w', padx=5, pady=2)
+
         # Buttons
         button_frame = ttk.Frame(top_frame)
-        button_frame.grid(row=11, column=0, columnspan=4, pady=10)
+        button_frame.grid(row=12, column=0, columnspan=4, pady=10)
         
         self.update_btn = ttk.Button(
             button_frame, 
@@ -268,7 +282,8 @@ class MainWindow:
     
     def _on_predict_clicked(self):
         """Handle Run Prediction button click"""
-        self.viewmodel.predict_async()
+        event_notes = self.event_notes_var.get().strip()
+        self.viewmodel.predict_async(event_notes=event_notes)
     
     def _on_save_email_credentials(self):
         """Save email username, password to .env and enabled/to to config."""
