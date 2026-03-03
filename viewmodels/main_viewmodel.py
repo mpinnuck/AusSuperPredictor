@@ -413,11 +413,13 @@ class MainViewModel:
         combined,
         live_overrides,
         event_notes: str = '',
+        send_email: bool = False,
     ) -> bool:
         """Shared prediction pipeline used by both UI and CLI paths.
 
         Handles feature engineering, model loading, decision, logging,
-        saving to history, emailing results, and performance snapshot.
+        saving to history, and performance snapshot.  Email is only
+        sent when *send_email* is True (CLI / cron path).
 
         Returns True on success, False on failure.
         """
@@ -533,24 +535,25 @@ class MainViewModel:
             event_notes=event_notes,
         )
 
-        # ── Email prediction results ────────────────────────────
-        try:
-            sent = send_prediction_email(self.config, {
-                "prediction_date": prediction_date_str,
-                "base_date": latest_date_str,
-                "base_price": latest_price,
-                "base_return": latest_return,
-                "probability": prob,
-                "decision": dec,
-                "confidence_level": decision['confidence_level'],
-                "market_regime": market_reg,
-                "model_version": model_ver,
-                "feature_details": feature_details,
-            })
-            if sent:
-                self.log_queue.put("Prediction emailed.", 'info')
-        except Exception as e:
-            self.log_queue.put(f"Email send failed: {e}", 'warning')
+        # ── Email prediction results (CLI / cron only) ─────────
+        if send_email:
+            try:
+                sent = send_prediction_email(self.config, {
+                    "prediction_date": prediction_date_str,
+                    "base_date": latest_date_str,
+                    "base_price": latest_price,
+                    "base_return": latest_return,
+                    "probability": prob,
+                    "decision": dec,
+                    "confidence_level": decision['confidence_level'],
+                    "market_regime": market_reg,
+                    "model_version": model_ver,
+                    "feature_details": feature_details,
+                })
+                if sent:
+                    self.log_queue.put("Prediction emailed.", 'info')
+            except Exception as e:
+                self.log_queue.put(f"Email send failed: {e}", 'warning')
 
         # ── Save daily performance snapshot ─────────────────────
         try:
@@ -650,7 +653,7 @@ class MainViewModel:
                 self.log_queue.put("No data available.", 'error')
                 return False
 
-            return self._run_prediction_core(combined, live_overrides, event_notes)
+            return self._run_prediction_core(combined, live_overrides, event_notes, send_email=True)
         except Exception as e:
             self.log_queue.put(f"Error: {e}", 'error')
             return False

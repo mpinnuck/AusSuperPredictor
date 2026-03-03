@@ -240,11 +240,21 @@ class DataManager:
 
     # ── Investing.com helper ─────────────────────────────────────────
 
+    # Investing.com hard-caps each response at 5 000 rows.  For long
+    # date ranges we must paginate to avoid silently missing recent data.
+    _INVESTING_PAGE_LIMIT = 5000
+    _INVESTING_CHUNK_YEARS = 8  # ≈2 000 trading days, well under the cap
+
     def _fetch_investing_series(
         self, pair_id: int, start_date: date, end_date: date,
         price_field: str = 'last_closeRaw',
     ) -> Optional[pd.Series]:
         """Fetch daily prices from the Investing.com historical API.
+
+        The API silently caps each response at 5 000 records.  For date
+        ranges with more trading days than that, the method automatically
+        chunks the request into ~8-year windows and concatenates the
+        results so that the full history is always returned.
 
         *price_field* selects which OHLC field to extract, e.g.
         ``'last_closeRaw'`` (default), ``'last_openRaw'``,
@@ -259,32 +269,62 @@ class DataManager:
                            'AppleWebKit/537.36'),
             'domain-id': 'au',
         }
-        start_str = start_date.strftime('%Y-%m-%d') if isinstance(start_date, date) else str(start_date)
-        end_str = end_date.strftime('%Y-%m-%d') if isinstance(end_date, date) else str(end_date)
-        url = (
-            f"https://api.investing.com/api/financialdata/historical/{pair_id}"
-            f"?start-date={start_str}&end-date={end_str}"
-            f"&time-frame=Daily&add-missing-rows=false"
-        )
 
-        try:
-            resp = req.get(url, headers=headers, timeout=30)
-            resp.raise_for_status()
-            records = resp.json().get('data', [])
-            if not records:
-                return None
-            dates = [pd.Timestamp(r['rowDateTimestamp']) for r in records]
-            values = [float(r[price_field]) for r in records]
-            series = pd.Series(
-                values,
-                index=pd.DatetimeIndex(dates).normalize().tz_localize(None),
+        # Normalise to plain date objects
+        sd = start_date if isinstance(start_date, date) and not isinstance(start_date, datetime) else start_date
+        ed = end_date   if isinstance(end_date, date)   and not isinstance(end_date, datetime)   else end_date
+        if isinstance(sd, datetime):
+            sd = sd.date()
+        if isinstance(ed, datetime):
+            ed = ed.date()
+
+        # Build date chunks (≤ _INVESTING_CHUNK_YEARS each)
+        chunks = []
+        chunk_start = sd
+        while chunk_start < ed:
+            chunk_end = min(
+                date(chunk_start.year + self._INVESTING_CHUNK_YEARS,
+                     chunk_start.month, chunk_start.day),
+                ed,
             )
-            series = series[~series.index.duplicated(keep='first')]
-            series.sort_index(inplace=True)
-            return series
-        except Exception as e:
-            self._log(f"⚠ Investing.com fetch failed (pair {pair_id}): {e}", 'warning')
+            chunks.append((chunk_start, chunk_end))
+            chunk_start = chunk_end + timedelta(days=1)
+
+        all_dates = []
+        all_values = []
+        for cs, ce in chunks:
+            url = (
+                f"https://api.investing.com/api/financialdata/historical/{pair_id}"
+                f"?start-date={cs.strftime('%Y-%m-%d')}"
+                f"&end-date={ce.strftime('%Y-%m-%d')}"
+                f"&time-frame=Daily&add-missing-rows=false"
+            )
+            try:
+                resp = req.get(url, headers=headers, timeout=30)
+                resp.raise_for_status()
+                records = resp.json().get('data', [])
+                if records:
+                    all_dates.extend(
+                        pd.Timestamp(r['rowDateTimestamp']) for r in records
+                    )
+                    all_values.extend(float(r[price_field]) for r in records)
+            except Exception as e:
+                self._log(
+                    f"⚠ Investing.com fetch failed (pair {pair_id}, "
+                    f"{cs}→{ce}): {e}",
+                    'warning',
+                )
+
+        if not all_dates:
             return None
+
+        series = pd.Series(
+            all_values,
+            index=pd.DatetimeIndex(all_dates).normalize().tz_localize(None),
+        )
+        series = series[~series.index.duplicated(keep='first')]
+        series.sort_index(inplace=True)
+        return series
 
     def get_market_data(self, end_date: date) -> pd.DataFrame:
         """Fetch market data for all sources in MARKET_SOURCES."""
