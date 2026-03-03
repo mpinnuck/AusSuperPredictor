@@ -12,6 +12,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 
+from utils.version import VERSION
+
 logger = logging.getLogger(__name__)
 
 
@@ -79,6 +81,7 @@ def send_prediction_email(config, prediction_data: dict) -> bool:
     confidence = prediction_data["confidence_level"]
     regime = prediction_data["market_regime"]
     model_ver = prediction_data["model_version"]
+    app_ver = VERSION
     features = prediction_data.get("feature_details", [])[:15]
 
     direction = "UP" if prob > 0.5 else "DOWN"
@@ -172,7 +175,7 @@ def send_prediction_email(config, prediction_data: dict) -> bool:
 </table>
 
 <p style="color:#999;font-size:0.8em;margin-top:20px">
-  Sent by AusSuperPredictor v{model_ver}
+  Sent by AusSuperPredictor v{app_ver}
 </p>
 </body>
 </html>

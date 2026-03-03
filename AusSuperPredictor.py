@@ -35,9 +35,7 @@ from views.main_window import MainWindow
 from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
 from utils.app_config import AppConfig
-
-# Application version
-VERSION = "4.8.0"
+from utils.version import VERSION
 
 APP_NAME = "AusSuperPredictor"
 

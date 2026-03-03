@@ -432,7 +432,7 @@ class ModelManager:
             df: Feature-engineered DataFrame (with ``target`` column).
             seeds: Range of ``random_state`` values to evaluate.
             ablate_cols: Columns to drop in the "without" variant.
-                         Defaults to ``['is_monday', 'is_friday']``.
+                         **Required** — caller must supply a non-empty list.
             progress_cb: Optional ``fn(current, total)`` called after each
                          seed pair completes (for progress bars).
             verdict_threshold: Effect-size multiplier against the pooled
@@ -444,7 +444,10 @@ class ModelManager:
             Dict with ``full_features`` and ``model_features`` summary
             stats, per-seed detail, verdicts, and metadata.
         """
-        ablate_cols = ablate_cols or ['is_monday', 'is_friday']
+        ablate_cols = ablate_cols or []
+        if not ablate_cols:
+            self._log("⚠ No columns selected for ablation", 'warning')
+            return {}
         missing = [c for c in ablate_cols if c not in df.columns]
         if missing:
             self._log(f"⚠ Ablation columns not in data: {missing}", 'warning')

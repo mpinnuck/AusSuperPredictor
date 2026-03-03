@@ -3,7 +3,7 @@ Main ViewModel - connects View with Models
 Handles presentation logic, threading, and UI state
 """
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from models.data_manager import DataManager
 from models.model_manager import ModelManager
@@ -390,115 +390,8 @@ class MainViewModel:
                     self.log_queue.put("No data available. Please update data first.", 'error')
                     return
                 
-                combined = self.model_manager.engineer_features(
-                    combined, for_prediction=True, live_overrides=live_overrides,
-                )
-                
-                if combined.empty:
-                    self.log_queue.put("No valid features could be created from the data.", 'error')
-                    return
-                
-                if not self.model_manager.load_model():
-                    self.log_queue.put("No trained model found. Please train first.", 'error')
-                    return
-                
-                # Get decision with confidence analysis
-                decision = self.model_manager.get_decision(combined, threshold=0.6)
-                
-                if decision['probability'] is not None:
-                    prob = decision['probability']
-                    feature_details = decision['feature_details']
-                    
-                    latest_date = combined.index[-1]
-                    latest_date_str = latest_date.strftime('%Y-%m-%d')
-                    latest_return = combined['daily_return'].iloc[-1] * 100
-                    latest_price = combined['price'].iloc[-1]
-                    
-                    # Calculate next trading day (skip weekends)
-                    from datetime import timedelta
-                    next_day = latest_date + timedelta(days=1)
-                    while next_day.weekday() >= 5:  # 5=Sat, 6=Sun
-                        next_day += timedelta(days=1)
-                    prediction_date_str = next_day.strftime('%Y-%m-%d')
-                    
-                    predicted_up = 1 if prob > 0.5 else 0
-                    
-                    self.log_queue.put(f"\n{'='*50}", 'info')
-                    self.log_queue.put(f"ASX200: {latest_price:,.2f} ({latest_date_str}) {latest_return:+.2f}%", 'info')
-                    self.log_queue.put(f"Prediction for: {prediction_date_str}", 'info')
-                    self.log_queue.put(f"Probability of POSITIVE return: {prob*100:.1f}%", 
-                                      'success' if prob>0.5 else 'info')
-                    self.log_queue.put(f"Probability of NEGATIVE return: {(1-prob)*100:.1f}%", 
-                                      'error' if prob<0.5 else 'info')
-                    
-                    # Decision & confidence
-                    self.log_queue.put(
-                        f"Confidence: {decision['confidence_level']}  "
-                        f"(threshold={decision['threshold_used']})", 'info'
-                    )
-                    dec = decision['decision']
-                    dec_level = ('success' if 'POSITIVE' in dec
-                                 else 'error' if 'NEGATIVE' in dec
-                                 else 'info')
-                    self.log_queue.put(f"Decision: {dec}", dec_level)
-                    self.log_queue.put('='*50, 'info')
-                    
-                    # Log top feature inputs
-                    self.log_queue.put(f"\nTop 15 features by importance:", 'info')
-                    self.log_queue.put(f"{'Feature':<30} {'Value':>12} {'Importance':>10}", 'info')
-                    self.log_queue.put(f"{'-'*30} {'-'*12} {'-'*10}", 'info')
-                    for fd in feature_details[:15]:
-                        val = fd['value']
-                        imp = fd['importance']
-                        name = fd['name']
-                        is_yield_chg = 'yield' in name and 'change' in name
-                        is_pct = (not is_yield_chg and
-                                  ('return' in name or 'change' in name
-                                   or 'premium' in name))
-                        if is_yield_chg:
-                            val_str = f"{val:>+11.4f}"
-                        elif is_pct:
-                            val_str = f"{val*100:>+10.2f}%"
-                        else:
-                            val_str = f"{val:>11.4f}"
-                        self.log_queue.put(
-                            f"{name:<30} {val_str:>12} {imp:>10.4f}", 'info'
-                        )
-                    
-                    # ── Step 3: save prediction to history CSV
-                    model_ver = self.data_manager.get_model_version()
-                    market_reg = self.data_manager.classify_market_regime()
-                    self.log_queue.put(f"Market regime: {market_reg}  |  Model version: {model_ver}", 'info')
-
-                    event_notes = getattr(self, '_pending_event_notes', '')
-                    if event_notes:
-                        self.log_queue.put(f"⚠ EVENT FLAG: {event_notes}", 'warning')
-                        self.log_queue.put(
-                            "⚠ External event flagged — prediction may not account for this",
-                            'warning',
-                        )
-
-                    self.data_manager.save_prediction_to_history(
-                        prediction_date=prediction_date_str,
-                        base_date=latest_date_str,
-                        base_price=latest_price,
-                        probability=prob,
-                        predicted_up=predicted_up,
-                        signal=dec,
-                        confidence_level=decision['confidence_level'],
-                        feature_details=feature_details,
-                        model_version=model_ver,
-                        market_regime=market_reg,
-                        event_notes=event_notes,
-                    )
-
-                    # ── Step 4: save daily performance snapshot
-                    try:
-                        self.data_manager.save_performance_snapshot()
-                    except Exception as e:
-                        self.log_queue.put(f"Could not save performance snapshot: {e}", 'warning')
-                else:
-                    self.log_queue.put("Prediction failed.", 'error')
+                event_notes = getattr(self, '_pending_event_notes', '')
+                self._run_prediction_core(combined, live_overrides, event_notes)
                     
             except Exception as e:
                 self.log_queue.put(f"Error during prediction: {e}", 'error')
@@ -512,6 +405,160 @@ class MainViewModel:
         thread = threading.Thread(target=worker)
         thread.daemon = True
         thread.start()
+
+    # ========== Shared Prediction Logic ==========
+
+    def _run_prediction_core(
+        self,
+        combined,
+        live_overrides,
+        event_notes: str = '',
+    ) -> bool:
+        """Shared prediction pipeline used by both UI and CLI paths.
+
+        Handles feature engineering, model loading, decision, logging,
+        saving to history, emailing results, and performance snapshot.
+
+        Returns True on success, False on failure.
+        """
+        combined = self.model_manager.engineer_features(
+            combined, for_prediction=True, live_overrides=live_overrides,
+        )
+        if combined.empty:
+            self.log_queue.put("No valid features could be created from the data.", 'error')
+            return False
+
+        if not self.model_manager.load_model():
+            self.log_queue.put("No trained model found. Please train first.", 'error')
+            return False
+
+        # Get decision with confidence analysis
+        decision = self.model_manager.get_decision(combined, threshold=0.6)
+        if decision['probability'] is None:
+            self.log_queue.put("Prediction failed.", 'error')
+            return False
+
+        prob = decision['probability']
+        feature_details = decision['feature_details']
+
+        latest_date = combined.index[-1]
+        latest_date_str = latest_date.strftime('%Y-%m-%d')
+        latest_return = combined['daily_return'].iloc[-1] * 100
+        latest_price = combined['price'].iloc[-1]
+
+        # Calculate next trading day (skip weekends)
+        next_day = latest_date + timedelta(days=1)
+        while next_day.weekday() >= 5:  # 5=Sat, 6=Sun
+            next_day += timedelta(days=1)
+        prediction_date_str = next_day.strftime('%Y-%m-%d')
+
+        predicted_up = 1 if prob > 0.5 else 0
+
+        # ── Log prediction summary ──────────────────────────────
+        self.log_queue.put(f"\n{'='*50}", 'info')
+        self.log_queue.put(
+            f"ASX200: {latest_price:,.2f} ({latest_date_str}) "
+            f"{latest_return:+.2f}%", 'info',
+        )
+        self.log_queue.put(f"Prediction for: {prediction_date_str}", 'info')
+        self.log_queue.put(
+            f"Probability of POSITIVE return: {prob*100:.1f}%",
+            'success' if prob > 0.5 else 'info',
+        )
+        self.log_queue.put(
+            f"Probability of NEGATIVE return: {(1-prob)*100:.1f}%",
+            'error' if prob < 0.5 else 'info',
+        )
+
+        # Decision & confidence
+        self.log_queue.put(
+            f"Confidence: {decision['confidence_level']}  "
+            f"(threshold={decision['threshold_used']})", 'info',
+        )
+        dec = decision['decision']
+        dec_level = ('success' if 'POSITIVE' in dec
+                     else 'error' if 'NEGATIVE' in dec
+                     else 'info')
+        self.log_queue.put(f"Decision: {dec}", dec_level)
+        self.log_queue.put('='*50, 'info')
+
+        # Log top feature inputs
+        self.log_queue.put(f"\nTop 15 features by importance:", 'info')
+        self.log_queue.put(f"{'Feature':<30} {'Value':>12} {'Importance':>10}", 'info')
+        self.log_queue.put(f"{'-'*30} {'-'*12} {'-'*10}", 'info')
+        for fd in feature_details[:15]:
+            val = fd['value']
+            imp = fd['importance']
+            name = fd['name']
+            is_yield_chg = 'yield' in name and 'change' in name
+            is_pct = (not is_yield_chg and
+                      ('return' in name or 'change' in name
+                       or 'premium' in name))
+            if is_yield_chg:
+                val_str = f"{val:>+11.4f}"
+            elif is_pct:
+                val_str = f"{val*100:>+10.2f}%"
+            else:
+                val_str = f"{val:>11.4f}"
+            self.log_queue.put(
+                f"{name:<30} {val_str:>12} {imp:>10.4f}", 'info',
+            )
+
+        # ── Metadata ────────────────────────────────────────────
+        model_ver = self.data_manager.get_model_version()
+        market_reg = self.data_manager.classify_market_regime()
+        self.log_queue.put(
+            f"Market regime: {market_reg}  |  Model version: {model_ver}", 'info',
+        )
+
+        if event_notes:
+            self.log_queue.put(f"⚠ EVENT FLAG: {event_notes}", 'warning')
+            self.log_queue.put(
+                "⚠ External event flagged — prediction may not account for this",
+                'warning',
+            )
+
+        # ── Save prediction to history CSV ──────────────────────
+        self.data_manager.save_prediction_to_history(
+            prediction_date=prediction_date_str,
+            base_date=latest_date_str,
+            base_price=latest_price,
+            probability=prob,
+            predicted_up=predicted_up,
+            signal=dec,
+            confidence_level=decision['confidence_level'],
+            feature_details=feature_details,
+            model_version=model_ver,
+            market_regime=market_reg,
+            event_notes=event_notes,
+        )
+
+        # ── Email prediction results ────────────────────────────
+        try:
+            sent = send_prediction_email(self.config, {
+                "prediction_date": prediction_date_str,
+                "base_date": latest_date_str,
+                "base_price": latest_price,
+                "base_return": latest_return,
+                "probability": prob,
+                "decision": dec,
+                "confidence_level": decision['confidence_level'],
+                "market_regime": market_reg,
+                "model_version": model_ver,
+                "feature_details": feature_details,
+            })
+            if sent:
+                self.log_queue.put("Prediction emailed.", 'info')
+        except Exception as e:
+            self.log_queue.put(f"Email send failed: {e}", 'warning')
+
+        # ── Save daily performance snapshot ─────────────────────
+        try:
+            self.data_manager.save_performance_snapshot()
+        except Exception as e:
+            self.log_queue.put(f"Could not save performance snapshot: {e}", 'warning')
+
+        return True
 
     # ========== Headless CLI Methods ==========
 
@@ -603,84 +650,7 @@ class MainViewModel:
                 self.log_queue.put("No data available.", 'error')
                 return False
 
-            combined = self.model_manager.engineer_features(
-                combined, for_prediction=True, live_overrides=live_overrides,
-            )
-            if combined.empty:
-                self.log_queue.put("No valid features.", 'error')
-                return False
-
-            if not self.model_manager.load_model():
-                self.log_queue.put("No trained model. Train first.", 'error')
-                return False
-
-            decision = self.model_manager.get_decision(combined, threshold=0.6)
-            if decision['probability'] is None:
-                self.log_queue.put("Prediction failed.", 'error')
-                return False
-
-            prob = decision['probability']
-            latest_date = combined.index[-1]
-            latest_price = combined['price'].iloc[-1]
-            latest_return = combined['daily_return'].iloc[-1]
-
-            from datetime import timedelta
-            next_day = latest_date + timedelta(days=1)
-            while next_day.weekday() >= 5:
-                next_day += timedelta(days=1)
-
-            predicted_up = 1 if prob > 0.5 else 0
-            self.log_queue.put(f"Live ASX200: {latest_price:,.2f} ({latest_return:+.2f}%) as of {latest_date.strftime('%Y-%m-%d')}", 'info')
-            self.log_queue.put(f"Prediction for {next_day.strftime('%Y-%m-%d')}: "
-                               f"P(up)={prob*100:.1f}%  {decision['decision']}", 'info')
-            self.log_queue.put(f"Confidence: {decision['confidence_level']}", 'info')
-
-            model_ver = self.data_manager.get_model_version()
-            market_reg = self.data_manager.classify_market_regime()
-            self.log_queue.put(f"Regime: {market_reg}  Model: {model_ver}", 'info')
-
-            if event_notes:
-                self.log_queue.put(f"⚠ EVENT FLAG: {event_notes}", 'warning')
-
-            self.data_manager.save_prediction_to_history(
-                prediction_date=next_day.strftime('%Y-%m-%d'),
-                base_date=latest_date.strftime('%Y-%m-%d'),
-                base_price=latest_price,
-                probability=prob,
-                predicted_up=predicted_up,
-                signal=decision['decision'],
-                confidence_level=decision['confidence_level'],
-                feature_details=decision['feature_details'],
-                model_version=model_ver,
-                market_regime=market_reg,
-                event_notes=event_notes,
-            )
-
-            # Email prediction results
-            try:
-                sent = send_prediction_email(self.config, {
-                    "prediction_date": next_day.strftime('%Y-%m-%d'),
-                    "base_date": latest_date.strftime('%Y-%m-%d'),
-                    "base_price": latest_price,
-                    "base_return": latest_return,
-                    "probability": prob,
-                    "decision": decision['decision'],
-                    "confidence_level": decision['confidence_level'],
-                    "market_regime": market_reg,
-                    "model_version": model_ver,
-                    "feature_details": decision['feature_details'],
-                })
-                if sent:
-                    self.log_queue.put("Prediction emailed.", 'info')
-            except Exception as e:
-                self.log_queue.put(f"Email send failed: {e}", 'warning')
-
-            try:
-                self.data_manager.save_performance_snapshot()
-            except Exception as e:
-                self.log_queue.put(f"Could not save performance snapshot: {e}", 'warning')
-
-            return True
+            return self._run_prediction_core(combined, live_overrides, event_notes)
         except Exception as e:
             self.log_queue.put(f"Error: {e}", 'error')
             return False
