@@ -161,11 +161,22 @@ class MarketSource:
 class TechnicalIndicator:
     type: str = ""
     # MACD params
-    fast: int = 0
-    slow: int = 0
-    signal: int = 0
+    fast: Optional[int] = None
+    slow: Optional[int] = None
+    signal: Optional[int] = None
     # RSI param
-    period: int = 0
+    period: Optional[int] = None
+
+    def __post_init__(self):
+        if self.type == 'macd' and not all([self.fast, self.slow, self.signal]):
+            raise ValueError(
+                f"MACD indicator requires fast, slow, and signal; "
+                f"got fast={self.fast}, slow={self.slow}, signal={self.signal}"
+            )
+        if self.type == 'rsi' and not self.period:
+            raise ValueError(
+                f"RSI indicator requires period; got period={self.period}"
+            )
 
     # Dict-like access for backward compatibility
     def __getitem__(self, key: str) -> Any:
@@ -173,16 +184,16 @@ class TechnicalIndicator:
 
     def get(self, key: str, default: Any = None) -> Any:
         val = getattr(self, key, None)
-        return val if val else default
+        return val if val is not None else default
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TechnicalIndicator":
         return cls(
             type=d.get("type", ""),
-            fast=d.get("fast", 0),
-            slow=d.get("slow", 0),
-            signal=d.get("signal", 0),
-            period=d.get("period", 0),
+            fast=d.get("fast"),
+            slow=d.get("slow"),
+            signal=d.get("signal"),
+            period=d.get("period"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
