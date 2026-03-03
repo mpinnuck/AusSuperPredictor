@@ -153,10 +153,6 @@ class ModelManager:
 
             if cat == 'futures':
                 df[f'{name}_return'] = df[name].pct_change()
-                # Premium vs yesterday's close — only for ASX futures
-                if name == 'asx_futures':
-                    yesterday_close = df['price'].shift(1)
-                    df['futures_premium'] = df[name] / yesterday_close - 1
 
             elif cat == 'volatility':
                 df[f'{name}_change'] = df[name].pct_change()
@@ -415,6 +411,223 @@ class ModelManager:
                 self._log(f"⚠ Cross-validation failed: {e}", 'warning')
         
         return result
+
+    # ── Multi-seed ablation experiment ────────────────────────────────
+
+    def run_multi_seed_ablation(
+        self,
+        df: pd.DataFrame,
+        seeds: range = range(10),
+        ablate_cols: Optional[List[str]] = None,
+        progress_cb=None,
+        verdict_threshold: float = 0.5,
+    ) -> Dict[str, Any]:
+        """Train with and without *ablate_cols* across multiple random seeds.
+
+        Compares accuracy, ECE and MCE distributions to determine whether
+        a feature set's calibration benefit is robust or an artifact of a
+        single train/test split.
+
+        Args:
+            df: Feature-engineered DataFrame (with ``target`` column).
+            seeds: Range of ``random_state`` values to evaluate.
+            ablate_cols: Columns to drop in the "without" variant.
+                         Defaults to ``['is_monday', 'is_friday']``.
+            progress_cb: Optional ``fn(current, total)`` called after each
+                         seed pair completes (for progress bars).
+            verdict_threshold: Effect-size multiplier against the pooled
+                         standard deviation to declare a winner (default
+                         0.5 — i.e. delta must exceed 0.5× the larger
+                         std to be considered meaningful).
+
+        Returns:
+            Dict with ``full_features`` and ``model_features`` summary
+            stats, per-seed detail, verdicts, and metadata.
+        """
+        ablate_cols = ablate_cols or ['is_monday', 'is_friday']
+        missing = [c for c in ablate_cols if c not in df.columns]
+        if missing:
+            self._log(f"⚠ Ablation columns not in data: {missing}", 'warning')
+            return {}
+
+        feature_cols_full = self.get_feature_columns(df)
+        feature_cols_model = [c for c in feature_cols_full if c not in ablate_cols]
+
+        split_idx = int(len(df) * 0.8)
+        X_full = df[feature_cols_full]
+        X_model = df[feature_cols_model]
+        y = df['target']
+
+        X_train_f, X_test_f = X_full.iloc[:split_idx], X_full.iloc[split_idx:]
+        X_train_m, X_test_m = X_model.iloc[:split_idx], X_model.iloc[split_idx:]
+        y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+
+        rows = []
+        seed_list = list(seeds)
+        total_seeds = len(seed_list)
+        self._log(
+            f"── Multi-seed ablation: {total_seeds} seeds, "
+            f"ablating {ablate_cols} ──",
+            'info',
+        )
+
+        for i, seed in enumerate(seed_list):
+            for label, X_tr, X_te in [
+                ('full', X_train_f, X_test_f),
+                ('model', X_train_m, X_test_m),
+            ]:
+                clf = RandomForestClassifier(
+                    n_estimators=self.n_estimators,
+                    max_depth=self.max_depth,
+                    min_samples_split=self.min_samples_split,
+                    min_samples_leaf=self.min_samples_leaf,
+                    random_state=seed,
+                    n_jobs=-1,
+                )
+                clf.fit(X_tr, y_train)
+                y_prob = clf.predict_proba(X_te)[:, 1]
+                y_pred = clf.predict(X_te)
+                acc = float(accuracy_score(y_test, y_pred))
+                bin_edges = np.linspace(0, 1, 11)
+                ece = self._compute_ece(y_prob, y_test.values, bin_edges)
+                mce = self._compute_mce(y_prob, y_test.values, bin_edges)
+                rows.append({
+                    'seed': seed, 'variant': label,
+                    'accuracy': acc, 'ece': ece, 'mce': mce,
+                })
+            if progress_cb:
+                progress_cb(i + 1, total_seeds)
+
+        results = pd.DataFrame(rows)
+        full_df = results[results['variant'] == 'full']
+        model_df = results[results['variant'] == 'model']
+
+        def _stats(vals):
+            return {
+                'mean': float(vals.mean()),
+                'std': float(vals.std()),
+            }
+
+        full_stats = {
+            f'{m}_mean': _stats(full_df[m])['mean'] for m in ('accuracy', 'ece', 'mce')
+        }
+        full_stats.update({
+            f'{m}_std': _stats(full_df[m])['std'] for m in ('accuracy', 'ece', 'mce')
+        })
+        model_stats = {
+            f'{m}_mean': _stats(model_df[m])['mean'] for m in ('accuracy', 'ece', 'mce')
+        }
+        model_stats.update({
+            f'{m}_std': _stats(model_df[m])['std'] for m in ('accuracy', 'ece', 'mce')
+        })
+
+        # Per-metric verdicts (KEEP / REMOVE / INCONCLUSIVE)
+        # For accuracy: higher is better → full > model means KEEP
+        # For ECE/MCE: lower is better → full < model means KEEP
+        verdicts = {}
+        for metric in ('accuracy', 'ece', 'mce'):
+            f_mean = full_stats[f'{metric}_mean']
+            m_mean = model_stats[f'{metric}_mean']
+            pooled_std = max(full_stats[f'{metric}_std'],
+                            model_stats[f'{metric}_std'], 1e-9)
+            threshold = verdict_threshold * pooled_std
+            delta = f_mean - m_mean
+            # "full wins" depends on direction
+            if metric == 'accuracy':
+                full_wins = delta > threshold         # higher is better
+            else:
+                full_wins = delta < -threshold        # lower is better
+            model_wins = not full_wins and abs(delta) > threshold
+            if full_wins:
+                verdicts[metric] = 'KEEP'
+            elif model_wins:
+                verdicts[metric] = 'REMOVE'
+            else:
+                verdicts[metric] = 'INCONCLUSIVE'
+
+        keep_count = sum(1 for v in verdicts.values() if v == 'KEEP')
+        remove_count = sum(1 for v in verdicts.values() if v == 'REMOVE')
+        if keep_count >= 2:
+            overall = 'KEEP'
+        elif remove_count >= 2:
+            overall = 'REMOVE'
+        else:
+            overall = 'INCONCLUSIVE'
+
+        # Log results
+        self._log("── Ablation Results ────────────────────────", 'info')
+        self._log(f"  Seeds: {seed_list}", 'info')
+        self._log(f"  Ablated: {ablate_cols}", 'info')
+        self._log("", 'info')
+        hdr = f"  {'Metric':<10s} {'Full':>14s} {'Model':>14s} {'Delta':>10s}  {'Verdict':>13s}"
+        self._log(hdr, 'info')
+        self._log("  " + "─" * 65, 'info')
+        for metric in ('accuracy', 'ece', 'mce'):
+            fm, fs = full_stats[f'{metric}_mean'], full_stats[f'{metric}_std']
+            mm_, ms = model_stats[f'{metric}_mean'], model_stats[f'{metric}_std']
+            delta = fm - mm_
+            self._log(
+                f"  {metric:<10s} "
+                f"{fm:.4f}±{fs:.4f} "
+                f"{mm_:.4f}±{ms:.4f} "
+                f"{delta:+.4f}  "
+                f"[{verdicts[metric]}]",
+                'info',
+            )
+        self._log("────────────────────────────────────────────", 'info')
+
+        # Per-seed detail
+        self._log("", 'info')
+        self._log(f"  {'Seed':>4s}  {'Acc(f)':>7s} {'Acc(m)':>7s}  "
+                  f"{'ECE(f)':>7s} {'ECE(m)':>7s}  "
+                  f"{'MCE(f)':>7s} {'MCE(m)':>7s}", 'info')
+        for seed in seed_list:
+            f_row = full_df[full_df['seed'] == seed].iloc[0]
+            m_row = model_df[model_df['seed'] == seed].iloc[0]
+            self._log(
+                f"  {seed:4d}  {f_row['accuracy']:.4f}  {m_row['accuracy']:.4f}  "
+                f"{f_row['ece']:.4f}  {m_row['ece']:.4f}  "
+                f"{f_row['mce']:.4f}  {m_row['mce']:.4f}",
+                'info',
+            )
+
+        self._log(f"\n  Overall: [{overall}]", 'info')
+
+        output = {
+            'full_features': full_stats,
+            'model_features': model_stats,
+            'verdicts': verdicts,
+            'overall': overall,
+            'ablated_cols': ablate_cols,
+            'seeds': seed_list,
+            'per_seed': rows,
+            'ran_at': datetime.now().isoformat(),
+        }
+
+        # Persist result
+        self._save_ablation_result(output)
+
+        return output
+
+    def _save_ablation_result(self, result: Dict[str, Any]) -> None:
+        """Persist ablation result to ``ablation_result.json``."""
+        path = os.path.join(os.path.dirname(self.model_path), 'ablation_result.json')
+        try:
+            with open(path, 'w') as f:
+                _json.dump(result, f, indent=2, default=str)
+        except Exception as e:
+            self._log(f"⚠ Could not save ablation result: {e}", 'warning')
+
+    def load_ablation_result(self) -> Optional[Dict[str, Any]]:
+        """Load the last ablation result, or None if unavailable."""
+        path = os.path.join(os.path.dirname(self.model_path), 'ablation_result.json')
+        if not os.path.exists(path):
+            return None
+        try:
+            with open(path) as f:
+                return _json.load(f)
+        except Exception:
+            return None
 
     # ── Training Snapshot ─────────────────────────────────────────────
 

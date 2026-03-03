@@ -34,6 +34,9 @@ class MainViewModel:
         # Callbacks (set by View)
         self.on_state_changed = None
         self.on_log_updated = None
+
+        # Last feature-engineered DataFrame (for ablation panel)
+        self.last_featured_df = None
         
         # Initialize
         self._refresh_last_date()
@@ -259,6 +262,9 @@ class MainViewModel:
                     self.log_queue.put("No valid features could be created from the data.", 'error')
                     return
                 
+                # Stash engineered data for ablation panel
+                self.last_featured_df = combined
+
                 self.log_queue.put("Training model...", 'info')
                 result = self.model_manager.train(combined)
                 

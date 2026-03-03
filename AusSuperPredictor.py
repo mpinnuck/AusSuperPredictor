@@ -37,7 +37,7 @@ from utils.config_manager import ConfigManager
 from utils.app_config import AppConfig
 
 # Application version
-VERSION = "4.7.0"
+VERSION = "4.8.0"
 
 APP_NAME = "AusSuperPredictor"
 

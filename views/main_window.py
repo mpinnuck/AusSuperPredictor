@@ -8,6 +8,7 @@ from tkinter import ttk
 from PIL import Image, ImageTk
 from views.log_panel import LogPanel
 from views.performance_panel import PerformancePanel
+from views.ablation_panel import AblationPanel
 from viewmodels.main_viewmodel import MainViewModel
 
 class MainWindow:
@@ -247,6 +248,14 @@ class MainWindow:
         self.perf_panel.pack(fill=tk.BOTH, expand=True)
         self.perf_panel.set_refresh_callback(self._refresh_performance)
         
+        # Ablation tab
+        ablation_tab = ttk.Frame(self.notebook)
+        self.notebook.add(ablation_tab, text='  Ablation  ')
+        self.ablation_panel = AblationPanel(
+            ablation_tab, self.viewmodel.model_manager,
+        )
+        self.ablation_panel.pack(fill=tk.BOTH, expand=True)
+        
         # Auto-refresh performance data when switching to the Performance tab
         self.notebook.bind('<<NotebookTabChanged>>', self._on_tab_changed)
     
@@ -393,7 +402,10 @@ class MainWindow:
         
         # Update last date label
         self.last_date_label.config(text=self.viewmodel.last_data_date)
-        
+
+        # Push latest featured data to ablation panel after training
+        if not self.viewmodel.is_training and self.viewmodel.last_featured_df is not None:
+            self.ablation_panel.set_featured_df(self.viewmodel.last_featured_df)
 
     
     def _center_window(self):

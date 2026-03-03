@@ -118,10 +118,11 @@ class MarketSource:
         return getattr(self, key)
 
     def get(self, key: str, default: Any = None) -> Any:
-        return getattr(self, key, default) or default
+        val = getattr(self, key, None)
+        return val if val is not None else default
 
     def __contains__(self, key: str) -> bool:
-        return hasattr(self, key) and bool(getattr(self, key))
+        return hasattr(self, key)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "MarketSource":
