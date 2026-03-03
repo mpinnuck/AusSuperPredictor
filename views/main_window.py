@@ -268,8 +268,21 @@ class MainWindow:
     def _process_log_queue(self):
         """Process queued log messages every 100ms"""
         messages = self.viewmodel.log_queue.get_all()
+
+        # Collapse consecutive progress messages so only the latest
+        # from each run of progress updates reaches the panel.
+        collapsed: list = []
         for msg, level in messages:
-            self.log_panel.log(msg, level)
+            if level == 'progress' and collapsed and collapsed[-1][1] == 'progress':
+                collapsed[-1] = (msg, level)   # keep only the newest
+            else:
+                collapsed.append((msg, level))
+
+        for msg, level in collapsed:
+            if level == 'progress':
+                self.log_panel.log_progress(msg)
+            else:
+                self.log_panel.log(msg, level)
         self.root.after(100, self._process_log_queue)
     
     def _on_update_clicked(self):

@@ -3,6 +3,7 @@ Data Manager - single responsibility for data operations
 Now saves data to the data folder
 """
 import os
+import time
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -312,10 +313,18 @@ class DataManager:
             end_date = datetime.combine(end_date, datetime.min.time())
 
         # ── 1. Download each ticker ──────────────────────────────────
+        total = len(self.MARKET_SOURCES)
+        t0 = time.time()
         raw: Dict[str, pd.Series] = {}
-        for src in self.MARKET_SOURCES:
+        for idx, src in enumerate(self.MARKET_SOURCES, 1):
             name, ticker = src['name'], src['ticker']
             source = src.get('source', 'yfinance')
+            elapsed = time.time() - t0
+            self._log(
+                f"Fetching market data ({idx}/{total}): {name}... "
+                f"[{elapsed:.0f}s]",
+                'progress',
+            )
             try:
                 if source == 'investing':
                     close = self._fetch_investing_series(
@@ -358,6 +367,12 @@ class DataManager:
                         self._log(f"⚠ {name} ({ticker}) returned empty data", 'warning')
             except Exception as e:
                 self._log(f"⚠ Failed to fetch {name} ({ticker}): {e}", 'warning')
+
+        fetch_secs = time.time() - t0
+        self._log(
+            f"✓ Fetched {len(raw)}/{total} market sources in {fetch_secs:.1f}s",
+            'success',
+        )
 
         if not raw:
             return pd.DataFrame()

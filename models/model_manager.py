@@ -5,6 +5,7 @@ Now saves models to the data folder
 import pandas as pd
 import numpy as np
 import json as _json
+import time
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -51,7 +52,6 @@ class ModelManager:
         self.feature_columns = None
         self.model_path = config.model.save_path
         self.features_path = config.model.features_save_path
-        self.market_sources = config.market_sources or []
         
         # Get params from typed config
         self.n_estimators = config.model.n_estimators
@@ -139,7 +139,7 @@ class ModelManager:
         _live_overrides: dict = {}  # col_name → value
         if for_prediction:
             live_idx = df.index[-1]
-            for src in self.market_sources:
+            for src in self.config.market_sources:
                 name = src['name']
                 cat = src.get('category', 'commodity')
                 for suffix in ('_return', '_change'):
@@ -148,7 +148,7 @@ class ModelManager:
                         _live_overrides[col] = df.at[live_idx, col]
 
         vol_sources = []  # track volatility sources for cross-feature
-        for src in self.market_sources:
+        for src in self.config.market_sources:
             name = src['name']
             cat = src.get('category', 'commodity')
             if name not in df.columns:
@@ -181,7 +181,7 @@ class ModelManager:
                     df.at[live_idx, col] = val
 
         # Cross-source: yield spread (first two bond yield sources)
-        bond_sources = [s['name'] for s in self.market_sources
+        bond_sources = [s['name'] for s in self.config.market_sources
                         if s.get('category') == 'bond_yield' and s['name'] in df.columns]
         if len(bond_sources) >= 2:
             df['yield_spread'] = df[bond_sources[0]] - df[bond_sources[1]]
@@ -251,7 +251,7 @@ class ModelManager:
     
     def get_feature_columns(self, df: pd.DataFrame) -> List[str]:
         """Get list of feature columns (exclude target, identifiers, and raw market source columns)"""
-        raw_source_names = {s['name'] for s in self.market_sources}
+        raw_source_names = {s['name'] for s in self.config.market_sources}
         exclude_cols = {'target', 'daily_return', 'price'} | raw_source_names
         return [col for col in df.columns if col not in exclude_cols]
     
@@ -308,7 +308,15 @@ class ModelManager:
                 random_state=self.random_state,
                 n_jobs=-1
             )
+            self._log(
+                f"Fitting RandomForest ({self.n_estimators} trees, "
+                f"{len(X_train)} rows, {len(self.feature_columns)} features)...",
+                'progress',
+            )
+            t0 = time.time()
             self.model.fit(X_train, y_train)
+            fit_secs = time.time() - t0
+            self._log(f"✓ Model fitted in {fit_secs:.1f}s", 'success')
             
             # Predictions
             y_train_pred = self.model.predict(X_train)

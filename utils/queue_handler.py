@@ -25,7 +25,8 @@ class QueueHandler:
     def put(self, message: str, level: str = 'info') -> None:
         """Add message to queue and write to the rotating log file."""
         self.queue.put((message, level))
-        if message and message.strip():
+        # Skip file logging for transient progress messages
+        if message and message.strip() and level != 'progress':
             _file_logger.log(_LEVEL_MAP.get(level, logging.INFO), message)
     
     def get_all(self) -> list:
