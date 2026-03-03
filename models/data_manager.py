@@ -459,14 +459,22 @@ class DataManager:
         return combined
     
     def fetch_live_asx200(self) -> Optional[pd.DataFrame]:
-        """Fetch today's live/intraday ASX200 price via yfinance ^AXJO.
+        """Fetch today's live ASX200 price, preferring Investing.com.
+
+        Investing.com returns the official post-auction close which
+        matches the historical training data source.  yfinance
+        ``fast_info.last_price`` often reflects the pre-auction price
+        and can diverge by ~0.1% from the official close.
+
+        Fetch order:
+        1. Investing.com chart API (instrument 171) — same source as
+           historical training data, returns post-auction close
+        2. yfinance ^AXJO — last-resort fallback (pre-auction price)
 
         Returns a single-row DataFrame with daily_return and price,
         or None if today's data is not available or already in CSV.
         """
         try:
-            import yfinance as yf
-
             fund_data = self.load_local_data()
             if fund_data.empty:
                 return None
@@ -478,12 +486,51 @@ class DataManager:
             if last_csv_date >= today:
                 return None
 
-            ticker = yf.Ticker("^AXJO")
-            info = ticker.fast_info
+            live_price = None
+            source_label = None
 
-            live_price = float(info.last_price)
-            prev_close = float(info.previous_close)
-            if live_price <= 0 or prev_close <= 0:
+            # ── 1. Investing.com chart API (instrument 171) ───────
+            try:
+                import requests as req
+
+                api_headers = {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                    'domain-id': 'au',
+                }
+                chart_url = (
+                    "https://api.investing.com/api/financialdata/171"
+                    "/historical/chart/?period=P1D&interval=PT5M&pointscount=60"
+                )
+                chart_resp = req.get(chart_url, headers=api_headers, timeout=15)
+                chart_resp.raise_for_status()
+                candles = chart_resp.json().get('data', [])
+                if candles:
+                    live_price = float(candles[-1][4])  # close of last candle
+                    source_label = "investing.com API"
+            except Exception as e:
+                self._log(
+                    f"⚠ Investing.com chart API for ASX200 failed: {e}",
+                    'warning',
+                )
+
+            # ── 2. yfinance fallback ──────────────────────────────
+            if live_price is None:
+                try:
+                    import yfinance as yf
+
+                    ticker = yf.Ticker("^AXJO")
+                    info = ticker.fast_info
+                    price = float(info.last_price)
+                    if price > 0:
+                        live_price = price
+                        source_label = "yfinance"
+                except Exception as e:
+                    self._log(
+                        f"⚠ yfinance ASX200 fallback failed: {e}",
+                        'warning',
+                    )
+
+            if live_price is None or live_price <= 0:
                 self._log("No live ASX200 data available", 'info')
                 return None
 
@@ -498,9 +545,10 @@ class DataManager:
                 'price': [live_price]
             }, index=pd.DatetimeIndex([live_date], name='date'))
 
-            intraday_chg = (live_price - prev_close) / prev_close * 100
+            intraday_chg = live_return * 100
             self._log(
-                f"✓ Live ASX200: {live_price:,.2f} ({intraday_chg:+.2f}%) as of {today}",
+                f"✓ Live ASX200: {live_price:,.2f} ({intraday_chg:+.2f}%) "
+                f"as of {today} [{source_label}]",
                 'success'
             )
             return live_row
