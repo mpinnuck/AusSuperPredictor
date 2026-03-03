@@ -10,11 +10,12 @@ from models.model_manager import ModelManager
 from utils.time_utils import SydneyTimeUtils
 from utils.queue_handler import QueueHandler
 from utils.email_sender import send_prediction_email, send_training_email
+from utils.app_config import AppConfig
 
 class MainViewModel:
     """ViewModel for the main window - handles all business logic for the View"""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: AppConfig):
         self.config = config
         self.log_queue = QueueHandler()
         self.data_manager = DataManager(config, self.log_queue)
@@ -28,7 +29,7 @@ class MainViewModel:
         self.is_training = False
         self.is_predicting = False
         self.market_close_hour, self.market_close_minute = self._parse_time(
-            config.get('schedule', {}).get('market_close_time', '16:00'))
+            config.schedule.market_close_time)
         
         # Callbacks (set by View)
         self.on_state_changed = None
@@ -116,18 +117,18 @@ class MainViewModel:
             f.write("\n".join(existing_lines) + "\n")
 
         # Update config so email_sender picks it up
-        self.config.setdefault("email", {})["username"] = username
-        self.config["email"]["from"] = username
+        self.config.email.username = username
+        self.config.email.from_addr = username
         if email_to:
-            self.config["email"]["to"] = email_to
+            self.config.email.to = email_to
         if enabled is not None:
-            self.config["email"]["enabled"] = enabled
+            self.config.email.enabled = enabled
 
         # Persist non-secret email fields to config.json
         import json
         try:
             with open("config.json", "w") as f:
-                json.dump(self.config, f, indent=4)
+                json.dump(self.config.to_dict(), f, indent=4)
         except Exception:
             pass
 
@@ -142,21 +143,21 @@ class MainViewModel:
             new_folder = os.path.abspath(new_folder)
         os.makedirs(new_folder, exist_ok=True)
 
-        self.config['data_folder'] = new_folder
-        self.config['data']['local_csv_path'] = os.path.join(new_folder, 'australian_super_daily.csv')
-        self.config['model']['save_path'] = os.path.join(new_folder, 'model.pkl')
-        self.config['model']['features_save_path'] = os.path.join(new_folder, 'features.pkl')
+        self.config.data_folder = new_folder
+        self.config.data.local_csv_path = os.path.join(new_folder, 'australian_super_daily.csv')
+        self.config.model.save_path = os.path.join(new_folder, 'model.pkl')
+        self.config.model.features_save_path = os.path.join(new_folder, 'features.pkl')
 
         # Live-update managers so a restart is not required
-        self.data_manager.local_csv_path = self.config['data']['local_csv_path']
+        self.data_manager.local_csv_path = self.config.data.local_csv_path
         self.data_manager.HISTORY_PATH = os.path.join(new_folder, 'asx200history.csv')
         self.data_manager.PERF_LOG_PATH = os.path.join(new_folder, 'performance_log.csv')
-        self.model_manager.model_path = self.config['model']['save_path']
-        self.model_manager.features_path = self.config['model']['features_save_path']
+        self.model_manager.model_path = self.config.model.save_path
+        self.model_manager.features_path = self.config.model.features_save_path
 
         try:
             with open('config.json', 'w') as f:
-                json.dump(self.config, f, indent=4)
+                json.dump(self.config.to_dict(), f, indent=4)
             self.log_queue.put(f"✓ Data folder updated to: {new_folder}", 'success')
         except Exception as e:
             self.log_queue.put(f"⚠ Could not save data folder: {e}", 'warning')

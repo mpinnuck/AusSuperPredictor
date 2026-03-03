@@ -35,13 +35,13 @@ def _load_dotenv() -> None:
             os.environ.setdefault(key, value)
 
 
-def send_prediction_email(config: dict, prediction_data: dict) -> bool:
+def send_prediction_email(config, prediction_data: dict) -> bool:
     """Send prediction results via email.
 
     Parameters
     ----------
-    config : dict
-        The full app config (must contain an ``email`` section).
+    config : AppConfig
+        The typed app config.
     prediction_data : dict
         Keys: prediction_date, base_date, base_price, probability,
               decision, confidence_level, market_regime, model_version,
@@ -52,18 +52,18 @@ def send_prediction_email(config: dict, prediction_data: dict) -> bool:
     bool
         True if the email was sent successfully.
     """
-    email_cfg = config.get("email", {})
-    if not email_cfg.get("enabled", False):
+    email_cfg = config.email
+    if not email_cfg.enabled:
         return False
 
     _load_dotenv()
 
-    smtp_server = email_cfg.get("smtp_server", "smtp.gmail.com") or "smtp.gmail.com"
-    smtp_port = email_cfg.get("smtp_port", 587)
-    username = os.environ.get("ASP_EMAIL_USERNAME", email_cfg.get("username", email_cfg.get("from", "")))
-    password = os.environ.get("ASP_EMAIL_PASSWORD", email_cfg.get("password", ""))
-    email_from = email_cfg.get("from", username)
-    email_to = email_cfg.get("to", "")
+    smtp_server = email_cfg.smtp_server or "smtp.gmail.com"
+    smtp_port = email_cfg.smtp_port
+    username = os.environ.get("ASP_EMAIL_USERNAME", email_cfg.username or email_cfg.from_addr)
+    password = os.environ.get("ASP_EMAIL_PASSWORD", email_cfg.password)
+    email_from = email_cfg.from_addr or username
+    email_to = email_cfg.to
 
     if not all([smtp_server, username, password, email_to]):
         logger.warning("Email not configured — skipping send.")
@@ -200,21 +200,21 @@ def send_prediction_email(config: dict, prediction_data: dict) -> bool:
         return False
 
 
-def _get_smtp_credentials(config: dict):
+def _get_smtp_credentials(config):
     """Extract SMTP credentials from config + env. Returns None if incomplete."""
-    email_cfg = config.get("email", {})
-    if not email_cfg.get("enabled", False):
+    email_cfg = config.email
+    if not email_cfg.enabled:
         return None
 
     _load_dotenv()
 
-    smtp_server = email_cfg.get("smtp_server", "smtp.gmail.com") or "smtp.gmail.com"
-    smtp_port = email_cfg.get("smtp_port", 587)
+    smtp_server = email_cfg.smtp_server or "smtp.gmail.com"
+    smtp_port = email_cfg.smtp_port
     username = os.environ.get("ASP_EMAIL_USERNAME",
-                              email_cfg.get("username", email_cfg.get("from", "")))
-    password = os.environ.get("ASP_EMAIL_PASSWORD", email_cfg.get("password", ""))
-    email_from = email_cfg.get("from", username)
-    email_to = email_cfg.get("to", "")
+                              email_cfg.username or email_cfg.from_addr)
+    password = os.environ.get("ASP_EMAIL_PASSWORD", email_cfg.password)
+    email_from = email_cfg.from_addr or username
+    email_to = email_cfg.to
 
     if not all([smtp_server, username, password, email_to]):
         logger.warning("Email not configured — skipping send.")
@@ -252,13 +252,13 @@ def _send(creds: dict, subject: str, plain_body: str, html_body: str) -> bool:
         return False
 
 
-def send_training_email(config: dict, training_data: dict) -> bool:
+def send_training_email(config, training_data: dict) -> bool:
     """Send training results via email.
 
     Parameters
     ----------
-    config : dict
-        The full app config (must contain an ``email`` section).
+    config : AppConfig
+        The typed app config.
     training_data : dict
         Keys: train_accuracy, test_accuracy, feature_importance (list[dict]),
               calibration (dict with expected_calibration_error, max_calibration_error),

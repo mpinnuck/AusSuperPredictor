@@ -10,39 +10,39 @@ import requests
 from datetime import datetime, timedelta, date
 from typing import Optional, Dict, Any
 from utils.time_utils import SydneyTimeUtils
+from utils.app_config import AppConfig, MarketSource
 
 class DataManager:
     """Manages all data operations - AustralianSuper and market data"""
     
     # Default market sources (used when config omits the key)
     _DEFAULT_MARKET_SOURCES = [
-        {'name': 'asx_futures',    'ticker': '8824',     'source': 'investing', 'shift': False, 'category': 'futures', 'live_source': 'investing', 'live_ticker': '8824'},
-        {'name': 'sp500_futures',  'ticker': 'ES=F',      'price_field': 'last_openRaw', 'shift': True,  'category': 'futures', 'live_source': 'investing', 'live_ticker': '1175153'},
-        {'name': 'vix',            'ticker': '^VIX',      'shift': True,  'category': 'volatility', 'live_source': 'investing', 'live_ticker': '44336', 'live_page': '/indices/volatility-s-p-500'},
-        {'name': 'asx_vix',        'ticker': '^AXVI',     'shift': True,  'category': 'volatility'},
-        {'name': 'gold',           'ticker': 'GC=F',      'price_field': 'last_openRaw', 'shift': True,  'category': 'commodity', 'live_source': 'investing', 'live_ticker': '8830', 'live_page': '/commodities/gold'},
-        {'name': 'copper',         'ticker': 'HG=F',      'price_field': 'last_openRaw', 'shift': True,  'category': 'commodity', 'live_source': 'investing', 'live_ticker': '8831', 'live_page': '/commodities/copper'},
-        {'name': 'oil',            'ticker': 'CL=F',      'price_field': 'last_openRaw', 'shift': True,  'category': 'commodity', 'live_source': 'investing', 'live_ticker': '8849', 'live_page': '/commodities/crude-oil'},
-        {'name': 'oil_vix',        'ticker': '^OVX',      'shift': True,  'category': 'volatility', 'live_source': 'investing', 'live_page': '/indices/cboe-crude-oil-volatility'},
-        {'name': 'iron_ore_proxy', 'ticker': 'BHP.AX',    'shift': False, 'category': 'commodity'},
-        {'name': 'audusd',         'ticker': 'AUDUSD=X',  'shift': False, 'category': 'currency'},
+        MarketSource(name='asx_futures',    ticker='8824',     source='investing', shift=False, category='futures', live_source='investing', live_ticker='8824'),
+        MarketSource(name='sp500_futures',  ticker='ES=F',      price_field='last_openRaw', shift=True,  category='futures', live_source='investing', live_ticker='1175153'),
+        MarketSource(name='vix',            ticker='^VIX',      shift=True,  category='volatility', live_source='investing', live_ticker='44336', live_page='/indices/volatility-s-p-500'),
+        MarketSource(name='asx_vix',        ticker='^AXVI',     shift=True,  category='volatility'),
+        MarketSource(name='gold',           ticker='GC=F',      price_field='last_openRaw', shift=True,  category='commodity', live_source='investing', live_ticker='8830', live_page='/commodities/gold'),
+        MarketSource(name='copper',         ticker='HG=F',      price_field='last_openRaw', shift=True,  category='commodity', live_source='investing', live_ticker='8831', live_page='/commodities/copper'),
+        MarketSource(name='oil',            ticker='CL=F',      price_field='last_openRaw', shift=True,  category='commodity', live_source='investing', live_ticker='8849', live_page='/commodities/crude-oil'),
+        MarketSource(name='oil_vix',        ticker='^OVX',      shift=True,  category='volatility', live_source='investing', live_page='/indices/cboe-crude-oil-volatility'),
+        MarketSource(name='iron_ore_proxy', ticker='BHP.AX',    shift=False, category='commodity'),
+        MarketSource(name='audusd',         ticker='AUDUSD=X',  shift=False, category='currency'),
     ]
 
-    def __init__(self, config: Dict[str, Any], log_queue=None):
+    def __init__(self, config: AppConfig, log_queue=None):
         self.config = config
-        self.local_csv_path = config['data']['local_csv_path']
-        self.start_date = datetime.strptime(config['data']['start_date'], '%d/%m/%Y')
+        self.local_csv_path = config.data.local_csv_path
+        self.start_date = datetime.strptime(config.data.start_date, '%d/%m/%Y')
         self.time_utils = SydneyTimeUtils()
         self.log_queue = log_queue
 
         # Market data source table – read from config, fall back to defaults
-        self.MARKET_SOURCES = config.get('market_sources',
-                                         self._DEFAULT_MARKET_SOURCES)
-        self._SHIFT_COLS = tuple(s['name'] for s in self.MARKET_SOURCES
-                                 if s['shift'])
+        self.MARKET_SOURCES = config.market_sources or self._DEFAULT_MARKET_SOURCES
+        self._SHIFT_COLS = tuple(s.name for s in self.MARKET_SOURCES
+                                 if s.shift)
 
         # Derive history / performance log paths from data_folder
-        data_folder = config.get('data_folder', 'data')
+        data_folder = config.data_folder or 'data'
         self.HISTORY_PATH = os.path.join(data_folder, 'asx200history.csv')
         self.PERF_LOG_PATH = os.path.join(data_folder, 'performance_log.csv')
 
@@ -188,7 +188,7 @@ class DataManager:
         """
         result = {"success": True, "records_added": 0, "message": ""}
         last_date = self.get_last_stored_date()
-        end_date = datetime.now() - timedelta(days=self.config['data']['end_date_offset_days'])
+        end_date = datetime.now() - timedelta(days=self.config.data.end_date_offset_days)
         end_date = end_date.date()
         
         try:
@@ -806,7 +806,7 @@ class DataManager:
         Format: 'YYYYMMDD_HHMMSS' based on the model file's modification time.
         Returns 'unknown' if the model file doesn't exist.
         """
-        model_path = self.config.get('model', {}).get('save_path', 'data/model.pkl')
+        model_path = self.config.model.save_path
         if os.path.exists(model_path):
             mtime = os.path.getmtime(model_path)
             return datetime.fromtimestamp(mtime).strftime('%Y%m%d_%H%M%S')

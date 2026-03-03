@@ -79,7 +79,7 @@ class MainWindow:
             row=3, column=0, sticky='e', padx=5, pady=5)
         self.data_file_label = ttk.Label(
             top_frame, 
-            text=os.path.basename(self.viewmodel.config['data']['local_csv_path']), 
+            text=os.path.basename(self.viewmodel.config.data.local_csv_path), 
             foreground='blue'
         )
         self.data_file_label.grid(row=3, column=1, sticky='w', padx=5, pady=5)
@@ -108,7 +108,7 @@ class MainWindow:
             row=5, column=0, sticky='e', padx=5, pady=5)
         self.model_file_label = ttk.Label(
             top_frame, 
-            text=os.path.basename(self.viewmodel.config['model']['save_path']), 
+            text=os.path.basename(self.viewmodel.config.model.save_path), 
             foreground='blue'
         )
         self.model_file_label.grid(row=5, column=1, sticky='w', padx=5, pady=5)
@@ -126,7 +126,7 @@ class MainWindow:
         ttk.Label(top_frame, text="Data folder:").grid(
             row=6, column=0, sticky='e', padx=5, pady=5)
         self.data_folder_var = tk.StringVar(
-            value=self.viewmodel.config.get('data_folder', 'data'))
+            value=self.viewmodel.config.data_folder or 'data')
         data_folder_entry = ttk.Entry(
             top_frame, textvariable=self.data_folder_var, width=50)
         data_folder_entry.grid(row=6, column=1, sticky='ew', padx=5, pady=5)
@@ -143,10 +143,10 @@ class MainWindow:
 
         # Email settings
         email_creds = self.viewmodel.load_email_credentials()
-        email_cfg = self.viewmodel.config.get('email', {})
-        email_cfg_user = email_cfg.get('username', '')
+        email_cfg = self.viewmodel.config.email
+        email_cfg_user = email_cfg.username
 
-        self.email_enabled_var = tk.BooleanVar(value=email_cfg.get('enabled', False))
+        self.email_enabled_var = tk.BooleanVar(value=email_cfg.enabled)
         ttk.Checkbutton(
             top_frame,
             text="Email enabled (emails prediction results when run from command line)",
@@ -172,7 +172,7 @@ class MainWindow:
         ttk.Label(top_frame, text="Email to:").grid(
             row=10, column=0, sticky='e', padx=5, pady=2)
         self.email_to_var = tk.StringVar(
-            value=email_cfg.get('to', ''))
+            value=email_cfg.to)
         email_to_entry = ttk.Entry(
             top_frame, textvariable=self.email_to_var, width=30)
         email_to_entry.grid(row=10, column=1, sticky='w', padx=5, pady=2)
@@ -297,7 +297,7 @@ class MainWindow:
     def _on_browse_data_folder(self):
         """Open a folder picker for the data directory."""
         from tkinter import filedialog
-        current = self.viewmodel.config.get('data_folder', '')
+        current = self.viewmodel.config.data_folder or ''
         folder = filedialog.askdirectory(
             title="Select Data Folder",
             initialdir=current if os.path.isdir(current) else None)
@@ -310,7 +310,7 @@ class MainWindow:
         new_folder = self.data_folder_var.get().strip()
         if not new_folder:
             return
-        current = self.viewmodel.config.get('data_folder', '')
+        current = self.viewmodel.config.data_folder or ''
         if new_folder != current:
             self.viewmodel.update_data_folder(new_folder)
             # Refresh file-existence indicators
@@ -319,7 +319,7 @@ class MainWindow:
     def _on_view_data_clicked(self):
         """Handle View Data button click"""
         from views.file_viewer import FileViewer
-        file_path = self.viewmodel.config['data']['local_csv_path']
+        file_path = self.viewmodel.config.data.local_csv_path
         if os.path.exists(file_path):
             FileViewer(self.root, file_path, "AustralianSuper Data")
         else:
@@ -328,7 +328,7 @@ class MainWindow:
     def _on_view_model_clicked(self):
         """Handle View Model button click"""
         from views.file_viewer import FileViewer
-        file_path = self.viewmodel.config['model']['save_path']
+        file_path = self.viewmodel.config.model.save_path
         if os.path.exists(file_path):
             FileViewer(self.root, file_path, "Model Information")
         else:
@@ -373,8 +373,8 @@ class MainWindow:
         self.predict_btn.config(state=tk.DISABLED if self.viewmodel.is_predicting else tk.NORMAL)
         
         # View buttons are always enabled if files exist
-        data_exists = os.path.exists(self.viewmodel.config['data']['local_csv_path'])
-        model_exists = os.path.exists(self.viewmodel.config['model']['save_path'])
+        data_exists = os.path.exists(self.viewmodel.config.data.local_csv_path)
+        model_exists = os.path.exists(self.viewmodel.config.model.save_path)
         self.view_data_btn.config(state=tk.NORMAL if data_exists else tk.DISABLED)
         self.view_model_btn.config(state=tk.NORMAL if model_exists else tk.DISABLED)
         

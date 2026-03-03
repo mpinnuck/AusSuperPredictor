@@ -13,9 +13,10 @@ import joblib
 import os
 from datetime import datetime
 from typing import Dict, Any, Optional, List
+from utils.app_config import AppConfig
 
 
-def get_max_rolling_lag_window(config: dict) -> int:
+def get_max_rolling_lag_window(config: AppConfig) -> int:
     """
     Determine the largest rolling or lag window needed for feature engineering.
     Includes lagged returns and config-driven technical indicators.
@@ -25,40 +26,39 @@ def get_max_rolling_lag_window(config: dict) -> int:
     max_lag = max(lagged_lags) if lagged_lags else 0
 
     # Technical indicators
-    indicators = config.get('technical_indicators', [
-        {'type': 'macd', 'fast': 12, 'slow': 26, 'signal': 9},
-        {'type': 'rsi', 'period': 14},
-    ])
+    indicators = config.technical_indicators
+    if not indicators:
+        from utils.app_config import TechnicalIndicator
+        indicators = [
+            TechnicalIndicator(type='macd', fast=12, slow=26, signal=9),
+            TechnicalIndicator(type='rsi', period=14),
+        ]
     max_window = max_lag
     for ind in indicators:
-        if ind['type'] == 'macd':
-            fast = ind.get('fast', 12)
-            slow = ind.get('slow', 26)
-            sig = ind.get('signal', 9)
-            max_window = max(max_window, fast, slow, sig)
-        elif ind['type'] == 'rsi':
-            period = ind.get('period', 14)
-            max_window = max(max_window, period)
+        if ind.type == 'macd':
+            max_window = max(max_window, ind.fast or 12, ind.slow or 26, ind.signal or 9)
+        elif ind.type == 'rsi':
+            max_window = max(max_window, ind.period or 14)
     return max_window
 
 class ModelManager:
     """Manages all ML model operations"""
     
-    def __init__(self, config: Dict[str, Any], log_queue=None):
+    def __init__(self, config: AppConfig, log_queue=None):
         self.config = config
         self.log_queue = log_queue
         self.model = None
         self.feature_columns = None
-        self.model_path = config['model']['save_path']
-        self.features_path = config['model']['features_save_path']
-        self.market_sources = config.get('market_sources', [])
+        self.model_path = config.model.save_path
+        self.features_path = config.model.features_save_path
+        self.market_sources = config.market_sources or []
         
-        # Get params with defaults for backward compatibility
-        self.n_estimators = config['model'].get('n_estimators', 100)
-        self.max_depth = config['model'].get('max_depth', 10)
-        self.min_samples_split = config['model'].get('min_samples_split', 2)
-        self.min_samples_leaf = config['model'].get('min_samples_leaf', 1)
-        self.random_state = config['model'].get('random_state', 42)
+        # Get params from typed config
+        self.n_estimators = config.model.n_estimators
+        self.max_depth = config.model.max_depth
+        self.min_samples_split = config.model.min_samples_split
+        self.min_samples_leaf = config.model.min_samples_leaf
+        self.random_state = config.model.random_state
         self.training_snapshot_path = os.path.join(
             os.path.dirname(self.model_path), 'last_training.json'
         )
@@ -191,30 +191,32 @@ class ModelManager:
             df['vix_spread'] = df[vol_sources[1]] - df[vol_sources[0]]
         
         # ── Config-driven technical indicators ────────────────────
-        indicators = self.config.get('technical_indicators', [
-            {'type': 'macd', 'fast': 12, 'slow': 26, 'signal': 9},
-            {'type': 'rsi', 'period': 14},
-        ])
+        indicators = self.config.technical_indicators
+        if not indicators:
+            from utils.app_config import TechnicalIndicator
+            indicators = [
+                TechnicalIndicator(type='macd', fast=12, slow=26, signal=9),
+                TechnicalIndicator(type='rsi', period=14),
+            ]
         for ind in indicators:
-            ind_type = ind['type']
-            if ind_type == 'macd':
-                fast = ind.get('fast', 12)
-                slow = ind.get('slow', 26)
-                sig = ind.get('signal', 9)
+            if ind.type == 'macd':
+                fast = ind.fast or 12
+                slow = ind.slow or 26
+                sig = ind.signal or 9
                 df[f'ema{fast}'] = df['price'].ewm(span=fast).mean()
                 df[f'ema{slow}'] = df['price'].ewm(span=slow).mean()
                 df['macd'] = df[f'ema{fast}'] - df[f'ema{slow}']
                 df['macd_signal'] = df['macd'].ewm(span=sig).mean()
                 df['macd_histogram'] = df['macd'] - df['macd_signal']
-            elif ind_type == 'rsi':
-                period = ind.get('period', 14)
+            elif ind.type == 'rsi':
+                period = ind.period or 14
                 delta = df['price'].diff()
                 gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
                 rs = gain / loss
                 df[f'rsi_{period}'] = 100 - (100 / (1 + rs))
             else:
-                self._log(f"⚠ Unknown indicator type: {ind_type}", 'warning')
+                self._log(f"⚠ Unknown indicator type: {ind.type}", 'warning')
         
         # When predicting, forward-fill computed features so the live row
         # inherits the latest market returns instead of NaN

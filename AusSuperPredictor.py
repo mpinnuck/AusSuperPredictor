@@ -34,59 +34,15 @@ import tkinter as tk
 from views.main_window import MainWindow
 from viewmodels.main_viewmodel import MainViewModel
 from utils.config_manager import ConfigManager
+from utils.app_config import AppConfig
 
 # Application version
-VERSION = "4.3.0"
+VERSION = "4.4.0"
 
 APP_NAME = "AusSuperPredictor"
 
 # Default config embedded for first-run seeding
-_DEFAULT_CONFIG = {
-    "data_folder": "~/Library/Application Support/AusSuperPredictor/data",
-    "data": {
-        "local_csv_path": "australian_super_daily.csv",
-        "start_date": "01/07/2008",
-        "end_date_offset_days": 1,
-        "fund_option": "Australian Shares"
-    },
-    "model": {
-        "save_path": "model.pkl",
-        "features_save_path": "features.pkl",
-        "n_estimators": 100,
-        "max_depth": 7,
-        "min_samples_split": 10,
-        "min_samples_leaf": 15,
-        "random_state": 42
-    },
-    "schedule": {
-        "market_close_time": "16:00"
-    },
-    "logging": {
-        "level": "INFO"
-    },
-    "email": {
-        "enabled": False,
-        "smtp_server": "smtp.gmail.com",
-        "smtp_port": 587,
-        "from": "",
-        "to": ""
-    },
-    "market_sources": [
-        {"name": "asx_futures", "ticker": "8824", "source": "investing", "shift": False, "category": "futures", "live_source": "investing", "live_ticker": "8824"},
-        {"name": "sp500_futures", "ticker": "ES=F", "shift": False, "category": "futures", "live_source": "investing", "live_ticker": "1175153", "price_field": "last_openRaw"},
-        {"name": "vix", "ticker": "^VIX", "shift": True, "category": "volatility"},
-        {"name": "asx_vix", "ticker": "^AXVI", "shift": True, "category": "volatility"},
-        {"name": "gold", "ticker": "GC=F", "shift": True, "category": "commodity"},
-        {"name": "copper", "ticker": "HG=F", "shift": True, "category": "commodity"},
-        {"name": "oil", "ticker": "CL=F", "shift": True, "category": "commodity"},
-        {"name": "iron_ore_proxy", "ticker": "BHP.AX", "shift": False, "category": "commodity"},
-        {"name": "audusd", "ticker": "AUDUSD=X", "shift": False, "category": "currency"}
-    ],
-    "technical_indicators": [
-        {"type": "macd", "fast": 12, "slow": 26, "signal": 9},
-        {"type": "rsi", "period": 14}
-    ]
-}
+_DEFAULT_CONFIG = AppConfig().to_dict()
 
 
 def _get_app_data_dir() -> str:
@@ -148,21 +104,6 @@ def _setup_logging():
 _setup_logging()
 
 
-def _resolve_data_paths(config):
-    """Resolve data_folder to an absolute path and update all data-related paths."""
-    data_folder = config.get('data_folder', 'data')
-    data_folder = os.path.expanduser(data_folder)
-    if not os.path.isabs(data_folder):
-        data_folder = os.path.abspath(data_folder)
-    os.makedirs(data_folder, exist_ok=True)
-    config['data_folder'] = data_folder
-
-    # Derive file paths from data_folder
-    config['data']['local_csv_path'] = os.path.join(data_folder, 'australian_super_daily.csv')
-    config['model']['save_path'] = os.path.join(data_folder, 'model.pkl')
-    config['model']['features_save_path'] = os.path.join(data_folder, 'features.pkl')
-
-
 def _flush_log(viewmodel):
     """Drain the log queue and print to stdout/stderr."""
     while not viewmodel.log_queue.queue.empty():
@@ -176,7 +117,7 @@ def run_cli(args):
     """Run in headless mode (no GUI) for cron / command-line use."""
     config_manager = ConfigManager('config.json')
     config = config_manager.load_config()
-    _resolve_data_paths(config)
+    config.resolve_data_paths()
     viewmodel = MainViewModel(config)
 
     ok = True
@@ -199,7 +140,7 @@ def main():
     # Load configuration
     config_manager = ConfigManager('config.json')
     config = config_manager.load_config()
-    _resolve_data_paths(config)
+    config.resolve_data_paths()
     
     # Initialize ViewModel
     viewmodel = MainViewModel(config)
