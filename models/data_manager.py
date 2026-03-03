@@ -9,7 +9,7 @@ import numpy as np
 import yfinance as yf
 import requests
 from datetime import datetime, timedelta, date
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from utils.time_utils import SydneyTimeUtils
 from utils.app_config import AppConfig, MarketSource
 
@@ -56,37 +56,31 @@ class DataManager:
         if data_dir and not os.path.exists(data_dir):
             os.makedirs(data_dir, exist_ok=True)
             self._log(f"Created data directory: {data_dir}", 'info')
+
+    def _read_csv_with_date_index(self, path: Optional[str] = None) -> pd.DataFrame:
+        """Read a CSV with flexible date-index detection.
+
+        If the file contains a ``date`` column it is used as the index;
+        otherwise the first column is assumed to be the date index.
+        Returns an empty DataFrame when *path* does not exist.
+        """
+        path = path or self.local_csv_path
+        if not os.path.exists(path):
+            return pd.DataFrame()
+        df_check = pd.read_csv(path, nrows=1)
+        if 'date' in df_check.columns:
+            return pd.read_csv(path, parse_dates=['date'], index_col='date')
+        return pd.read_csv(path, parse_dates=[0], index_col=0)
     
     def get_last_stored_date(self) -> Optional[date]:
         """Return the latest date in local CSV, or None if file missing"""
-        if os.path.exists(self.local_csv_path):
-            # First read to check column structure
-            df_check = pd.read_csv(self.local_csv_path, nrows=1)
-            
-            # Check if 'date' column exists, otherwise use first column as date index
-            if 'date' in df_check.columns:
-                df = pd.read_csv(self.local_csv_path, parse_dates=['date'], index_col='date')
-            else:
-                # Use first column (index 0) as date index
-                df = pd.read_csv(self.local_csv_path, parse_dates=[0], index_col=0)
-                
-            if not df.empty:
-                return df.index.max().date()
+        df = self._read_csv_with_date_index()
+        if not df.empty:
+            return df.index.max().date()
         return None
     
-    def fetch_australiansuper_data(self, start_date: date, end_date: date) -> pd.DataFrame:
-        """
-        Fetch AustralianSuper CSV from the API for a given date range
-        Returns DataFrame with columns 'daily_return' and 'price'
-        API returns: Rate Date, High Growth, Balanced, Socially Aware, etc.
-        Values are percentages (e.g. 0.4556 means 0.4556%)
-        """
-        # TEMPORARY: Skip AustralianSuper API, go straight to ASX200 fallback
-        self._log("Skipping AustralianSuper API (temporary), using ASX200 fallback", 'info')
-        return self._get_asx200_proxy(start_date, end_date)
-    
-    def _get_asx200_proxy(self, start_date: date, end_date: date) -> pd.DataFrame:
-        """Fallback using ASX200 daily data from Investing.com (accurate close prices)."""
+    def fetch_asx200(self, start_date: date, end_date: date) -> pd.DataFrame:
+        """Fetch ASX200 daily data from Investing.com (accurate close prices)."""
         self._log("Fetching daily ASX200 data from Investing.com...", 'info')
         self._log(f"Date range: {start_date} to {end_date}", 'info')
         
@@ -196,7 +190,7 @@ class DataManager:
             if last_date is None:
                 start = self.start_date.date()
                 self._log(f"Initial data fetch from {start} to {end_date}", 'info')
-                new_data = self.fetch_australiansuper_data(start, end_date)
+                new_data = self.fetch_asx200(start, end_date)
                 if not new_data.empty:
                     # Ensure directory exists before saving
                     self._ensure_data_directory()
@@ -212,7 +206,7 @@ class DataManager:
                 if start <= end_date:
                     # Fetch from last_date (not start) so pct_change has a reference price
                     # for calculating returns on the first new day
-                    new_data = self.fetch_australiansuper_data(last_date, end_date)
+                    new_data = self.fetch_asx200(last_date, end_date)
                     if not new_data.empty:
                         # Trim to only new data (after last_date)
                         new_data = new_data[new_data.index > pd.Timestamp(last_date)]
@@ -220,12 +214,7 @@ class DataManager:
                         # Ensure directory exists before saving
                         self._ensure_data_directory()
                         
-                        # Read existing data with flexible column handling
-                        df_check = pd.read_csv(self.local_csv_path, nrows=1)
-                        if 'date' in df_check.columns:
-                            existing = pd.read_csv(self.local_csv_path, parse_dates=['date'], index_col='date')
-                        else:
-                            existing = pd.read_csv(self.local_csv_path, parse_dates=[0], index_col=0)
+                        existing = self._read_csv_with_date_index()
                             
                         combined = pd.concat([existing, new_data])
                         combined = combined[~combined.index.duplicated(keep='last')]
@@ -247,17 +236,7 @@ class DataManager:
     
     def load_local_data(self) -> pd.DataFrame:
         """Load the full local dataset"""
-        if os.path.exists(self.local_csv_path):
-            # First read to check column structure
-            df_check = pd.read_csv(self.local_csv_path, nrows=1)
-            
-            # Check if 'date' column exists, otherwise use first column as date index
-            if 'date' in df_check.columns:
-                return pd.read_csv(self.local_csv_path, parse_dates=['date'], index_col='date')
-            else:
-                # Use first column (index 0) as date index
-                return pd.read_csv(self.local_csv_path, parse_dates=[0], index_col=0)
-        return pd.DataFrame()
+        return self._read_csv_with_date_index()
 
     # ── Investing.com helper ─────────────────────────────────────────
 
@@ -688,11 +667,37 @@ class DataManager:
             except Exception as e:
                 self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
 
+        # ── Canary check: alert if fewer sources than expected ────────
+        expected = sum(
+            1 for s in self.MARKET_SOURCES
+            if not s.shift or s.get('live_source')
+        )
+        fetched = len(quotes)
+        if fetched < expected:
+            missing = [
+                s.name for s in self.MARKET_SOURCES
+                if (not s.shift or s.get('live_source')) and s.name not in quotes
+            ]
+            self._log(
+                f"⚠ Live quotes canary: {fetched}/{expected} sources fetched. "
+                f"Missing: {', '.join(missing)}",
+                'warning',
+            )
+
         return quotes
     
-    def prepare_combined_data_for_prediction(self) -> pd.DataFrame:
+    def prepare_combined_data_for_prediction(
+        self,
+    ) -> Tuple[pd.DataFrame, Dict[str, float]]:
         """
         Prepare data for prediction with live market prices and returns.
+
+        Returns:
+            A tuple of ``(combined_df, live_overrides)`` where
+            *live_overrides* maps derived column names (e.g.
+            ``'gold_return'``) to their live values so that
+            ``engineer_features()`` can restore them after
+            ``pct_change()`` overwrites the live row.
 
         Pipeline:
         1. Load local AustralianSuper CSV
@@ -739,9 +744,10 @@ class DataManager:
         # ── Inject live market prices and returns into the live row ─────
         # The derived feature columns (_return, _change, _level) are
         # created later by engineer_features().  Pre-create them here
-        # with the live values so that engineer_features' _live_overrides
-        # mechanism can capture them before pct_change()/diff() runs,
-        # then restore them afterwards.
+        # with the live values so that engineer_features can restore
+        # them (via the live_overrides dict) after pct_change()/diff()
+        # runs.
+        live_overrides: Dict[str, float] = {}
         if live_row is not None and len(combined) > 1:
             live_quotes = self.fetch_live_market_quotes()
             for col, qdata in live_quotes.items():
@@ -756,6 +762,7 @@ class DataManager:
                         if ret_col not in combined.columns:
                             combined[ret_col] = float('nan')
                         combined.iloc[-1, combined.columns.get_loc(ret_col)] = qdata['pct']
+                        live_overrides[ret_col] = qdata['pct']
 
                     elif cat == 'bond_yield':
                         chg_col = f"{col}_change"
@@ -763,18 +770,20 @@ class DataManager:
                             if chg_col not in combined.columns:
                                 combined[chg_col] = float('nan')
                             combined.iloc[-1, combined.columns.get_loc(chg_col)] = qdata['chg']
+                            live_overrides[chg_col] = qdata['chg']
 
                     elif cat in ('commodity', 'currency') and qdata.get('pct') is not None:
                         ret_col = f"{col}_return"
                         if ret_col not in combined.columns:
                             combined[ret_col] = float('nan')
                         combined.iloc[-1, combined.columns.get_loc(ret_col)] = qdata['pct']
+                        live_overrides[ret_col] = qdata['pct']
 
         # Forward-fill remaining gaps (with staleness warnings)
         combined = self._ffill_with_staleness_check(combined)
 
         combined.dropna(subset=['daily_return', 'price'], inplace=True)
-        return combined    
+        return combined, live_overrides
     # ── Market Regime Classification ──────────────────────────────────
 
     def classify_market_regime(self, lookback: int = 20) -> str:

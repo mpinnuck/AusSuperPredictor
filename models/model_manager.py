@@ -7,9 +7,8 @@ import numpy as np
 import json as _json
 import time
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, TimeSeriesSplit, cross_val_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.model_selection import cross_val_score
 import joblib
 import os
 from datetime import datetime
@@ -84,10 +83,20 @@ class ModelManager:
                 os.makedirs(data_dir, exist_ok=True)
                 self._log(f"Created directory: {data_dir}")
     
-    def engineer_features(self, df: pd.DataFrame, for_prediction: bool = False) -> pd.DataFrame:
+    def engineer_features(
+        self,
+        df: pd.DataFrame,
+        for_prediction: bool = False,
+        live_overrides: Optional[Dict[str, float]] = None,
+    ) -> pd.DataFrame:
         """Create predictive features from raw data with validation.
+
         Args:
-            for_prediction: If True, keeps the last row (no target needed for prediction).
+            for_prediction: If True, keeps the last row (no target needed).
+            live_overrides: ``{col_name: value}`` of pre-computed live
+                return/change values to restore after ``pct_change()``
+                overwrites them.  Built by the caller (DataManager) from
+                live market quotes.
         """
         if df.empty:
             self._log("⚠ Cannot engineer features: DataFrame is empty", 'warning')
@@ -133,19 +142,7 @@ class ModelManager:
         df['positive_streak'] = streak
 
         # ── Config-driven market-source features ──────────────────────
-        # When predicting, the caller may have pre-injected live return
-        # values into the last row.  Capture them *before* pct_change()
-        # overwrites the column so we can restore them afterwards.
-        _live_overrides: dict = {}  # col_name → value
-        if for_prediction:
-            live_idx = df.index[-1]
-            for src in self.config.market_sources:
-                name = src['name']
-                cat = src.get('category', 'commodity')
-                for suffix in ('_return', '_change'):
-                    col = f'{name}{suffix}'
-                    if col in df.columns and pd.notna(df.at[live_idx, col]):
-                        _live_overrides[col] = df.at[live_idx, col]
+        _live_overrides = live_overrides or {}
 
         vol_sources = []  # track volatility sources for cross-feature
         for src in self.config.market_sources:
@@ -376,7 +373,11 @@ class ModelManager:
         return result
     
     def train_with_cv(self, df: pd.DataFrame, cv_folds: int = 5) -> Dict[str, Any]:
-        """Train with cross-validation for more robust evaluation"""
+        """Train with time-series cross-validation for more robust evaluation.
+
+        Uses ``TimeSeriesSplit`` instead of KFold to preserve temporal
+        ordering and avoid data leakage (future data in training folds).
+        """
         result = self.train(df)
         
         if result["success"] and self.model is not None:
@@ -384,13 +385,14 @@ class ModelManager:
                 X = df[self.feature_columns]
                 y = df['target']
                 
-                # Perform cross-validation
-                cv_scores = cross_val_score(self.model, X, y, cv=cv_folds)
+                # Time-series aware CV — respects temporal ordering
+                tscv = TimeSeriesSplit(n_splits=cv_folds)
+                cv_scores = cross_val_score(self.model, X, y, cv=tscv)
                 result["cv_mean"] = cv_scores.mean()
                 result["cv_std"] = cv_scores.std()
                 result["cv_scores"] = cv_scores.tolist()
                 
-                self._log(f"✓ Cross-validation complete. Mean: {result['cv_mean']:.3f} (±{result['cv_std']:.3f})", 'success')
+                self._log(f"✓ Time-series CV complete. Mean: {result['cv_mean']:.3f} (±{result['cv_std']:.3f})", 'success')
                 
             except Exception as e:
                 result["cv_error"] = str(e)

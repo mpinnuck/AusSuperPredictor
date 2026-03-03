@@ -378,13 +378,15 @@ class MainViewModel:
                     self.data_manager.detect_model_drift()
 
                 self.log_queue.put("Loading combined data with live ASX200...", 'info')
-                combined = self.data_manager.prepare_combined_data_for_prediction()
+                combined, live_overrides = self.data_manager.prepare_combined_data_for_prediction()
                 
                 if combined.empty:
                     self.log_queue.put("No data available. Please update data first.", 'error')
                     return
                 
-                combined = self.model_manager.engineer_features(combined, for_prediction=True)
+                combined = self.model_manager.engineer_features(
+                    combined, for_prediction=True, live_overrides=live_overrides,
+                )
                 
                 if combined.empty:
                     self.log_queue.put("No valid features could be created from the data.", 'error')
@@ -590,12 +592,14 @@ class MainViewModel:
                 self.log_queue.put(f"Back-filled {updated} previous prediction(s)", 'info')
 
             self.log_queue.put("Loading combined data with live ASX200...", 'info')
-            combined = self.data_manager.prepare_combined_data_for_prediction()
+            combined, live_overrides = self.data_manager.prepare_combined_data_for_prediction()
             if combined.empty:
                 self.log_queue.put("No data available.", 'error')
                 return False
 
-            combined = self.model_manager.engineer_features(combined, for_prediction=True)
+            combined = self.model_manager.engineer_features(
+                combined, for_prediction=True, live_overrides=live_overrides,
+            )
             if combined.empty:
                 self.log_queue.put("No valid features.", 'error')
                 return False
