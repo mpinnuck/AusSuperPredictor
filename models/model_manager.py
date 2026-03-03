@@ -146,8 +146,8 @@ class ModelManager:
 
         vol_sources = []  # track volatility sources for cross-feature
         for src in self.config.market_sources:
-            name = src['name']
-            cat = src.get('category', 'commodity')
+            name = src.name
+            cat = src.category or 'commodity'
             if name not in df.columns:
                 continue
 
@@ -178,8 +178,8 @@ class ModelManager:
                     df.at[live_idx, col] = val
 
         # Cross-source: yield spread (first two bond yield sources)
-        bond_sources = [s['name'] for s in self.config.market_sources
-                        if s.get('category') == 'bond_yield' and s['name'] in df.columns]
+        bond_sources = [s.name for s in self.config.market_sources
+                        if s.category == 'bond_yield' and s.name in df.columns]
         if len(bond_sources) >= 2:
             df['yield_spread'] = df[bond_sources[0]] - df[bond_sources[1]]
 
@@ -235,8 +235,24 @@ class ModelManager:
             last_filled = last_row.ffill(axis=0)
             nan_cols = last_filled.columns[last_filled.isna().any()].tolist()
             if nan_cols:
-                self._log(f"⚠ Live row still has NaN in: {nan_cols} — filling with 0", 'warning')
-                last_filled = last_filled.fillna(0)
+                # _level columns represent absolute prices/indices — 0 is
+                # nonsensical.  Forward-fill from the last known value in
+                # the training data instead.  _return/_change columns are
+                # safe to zero (meaning "no movement").
+                level_nans = [c for c in nan_cols if c.endswith('_level')]
+                other_nans = [c for c in nan_cols if not c.endswith('_level')]
+                if level_nans and not df.empty:
+                    for col in level_nans:
+                        if col in df.columns:
+                            last_filled[col] = df[col].iloc[-1]
+                    still_nan = [c for c in level_nans
+                                 if last_filled[c].isna().any()]
+                    if still_nan:
+                        self._log(f"⚠ Level columns still NaN (zeroed): {still_nan}", 'warning')
+                        last_filled[still_nan] = 0
+                if other_nans:
+                    self._log(f"⚠ Live row NaN → 0 for return/change cols: {other_nans}", 'warning')
+                    last_filled[other_nans] = 0
             df = pd.concat([df, last_filled])
         
         if df.empty:
@@ -248,7 +264,7 @@ class ModelManager:
     
     def get_feature_columns(self, df: pd.DataFrame) -> List[str]:
         """Get list of feature columns (exclude target, identifiers, and raw market source columns)"""
-        raw_source_names = {s['name'] for s in self.config.market_sources}
+        raw_source_names = {s.name for s in self.config.market_sources}
         exclude_cols = {'target', 'daily_return', 'price'} | raw_source_names
         return [col for col in df.columns if col not in exclude_cols]
     

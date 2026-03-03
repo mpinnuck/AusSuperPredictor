@@ -296,8 +296,8 @@ class DataManager:
         t0 = time.time()
         raw: Dict[str, pd.Series] = {}
         for idx, src in enumerate(self.MARKET_SOURCES, 1):
-            name, ticker = src['name'], src['ticker']
-            source = src.get('source', 'yfinance')
+            name, ticker = src.name, src.ticker
+            source = src.source
             elapsed = time.time() - t0
             self._log(
                 f"Fetching market data ({idx}/{total}): {name}... "
@@ -314,7 +314,7 @@ class DataManager:
                         end_date=end_date.date()
                             if isinstance(end_date, datetime)
                             else end_date,
-                        price_field=src.get('price_field', 'last_closeRaw'),
+                        price_field=src.price_field or 'last_closeRaw',
                     )
                     if close is not None and not close.empty:
                         raw[name] = close
@@ -328,7 +328,7 @@ class DataManager:
                         'last_maxRaw': 'High',
                         'last_minRaw': 'Low',
                     }
-                    pf = src.get('price_field', 'last_closeRaw')
+                    pf = src.price_field or 'last_closeRaw'
                     yf_col = yf_col_map.get(pf, 'Close')
 
                     data = yf.download(ticker, start=self.start_date,
@@ -397,8 +397,8 @@ class DataManager:
         *max_stale_days*, log a warning so the user knows the model
         is using potentially outdated data.
         """
-        market_cols = [s['name'] for s in self.MARKET_SOURCES
-                       if s['name'] in df.columns]
+        market_cols = [s.name for s in self.MARKET_SOURCES
+                       if s.name in df.columns]
         stale: dict = {}  # col → max consecutive NaN gap
         for col in market_cols:
             is_nan = df[col].isna()
@@ -533,11 +533,11 @@ class DataManager:
             # Skip shifted sources unless they have an explicit live_source
             # (e.g. bond yields are shifted for training but need live data
             # at prediction time)
-            if src['shift'] and 'live_source' not in src:
+            if src.shift and not src.live_source:
                 continue
-            name = src['name']
-            live_source = src.get('live_source', src.get('source', 'yfinance'))
-            live_ticker = src.get('live_ticker')  # None if not explicitly set
+            name = src.name
+            live_source = src.live_source or src.source
+            live_ticker = src.live_ticker or None  # None if not explicitly set
 
             if live_source == 'investing':
                 try:
@@ -551,7 +551,7 @@ class DataManager:
                     # The page embeds JSON with the real-time derived
                     # price, change and change% (settlement-referenced,
                     # matching the website display exactly).
-                    live_page = src.get('live_page')
+                    live_page = src.live_page or None
                     if live_page:
                         if live_ticker:
                             page_url = f"https://au.investing.com{live_page}?cid={live_ticker}"
@@ -617,10 +617,10 @@ class DataManager:
                         if candles:
                             live_price = float(candles[-1][4])
                         else:
-                            pf = src.get('price_field', 'last_closeRaw')
+                            pf = src.price_field or 'last_closeRaw'
                             live_price = float(daily_data[0][pf])
 
-                        pf = src.get('price_field', 'last_closeRaw')
+                        pf = src.price_field or 'last_closeRaw'
                         if len(daily_data) >= 2:
                             prev_price = float(daily_data[1][pf])
                         elif daily_data:
@@ -639,7 +639,7 @@ class DataManager:
                             'price': live_price,
                             'pct': live_pct,
                             'chg': live_chg,
-                            'category': src.get('category', 'commodity'),
+                            'category': src.category or 'commodity',
                         }
                     else:
                         self._log(f"⚠ No live data for {name}", 'warning')
@@ -650,7 +650,7 @@ class DataManager:
 
             # yfinance sources
             try:
-                yf_ticker = live_ticker or src['ticker']
+                yf_ticker = live_ticker or src.ticker
                 t = yf.Ticker(yf_ticker)
                 info = t.fast_info
                 price = float(info.last_price)
@@ -661,7 +661,7 @@ class DataManager:
                         'price': price,
                         'pct': pct,
                         'chg': None,
-                        'category': src.get('category', 'commodity'),
+                        'category': src.category or 'commodity',
                     }
                     self._log(f"✓ Live {name}: {price:,.4f} ({pct*100:+.2f}%)", 'success')
             except Exception as e:
@@ -670,18 +670,18 @@ class DataManager:
         # ── Canary check: alert if fewer sources than expected ────────
         expected = sum(
             1 for s in self.MARKET_SOURCES
-            if not s.shift or s.get('live_source')
+            if not s.shift or s.live_source
         )
         fetched = len(quotes)
         if fetched < expected:
             missing = [
                 s.name for s in self.MARKET_SOURCES
-                if (not s.shift or s.get('live_source')) and s.name not in quotes
+                if (not s.shift or s.live_source) and s.name not in quotes
             ]
             self._log(
-                f"⚠ Live quotes canary: {fetched}/{expected} sources fetched. "
+                f"✗ Live quotes canary: {fetched}/{expected} sources fetched. "
                 f"Missing: {', '.join(missing)}",
-                'warning',
+                'error',
             )
 
         return quotes
