@@ -869,6 +869,11 @@ class DataManager:
                         combined.iloc[-1, combined.columns.get_loc(ret_col)] = qdata['pct']
                         live_overrides[ret_col] = qdata['pct']
 
+        # Preserve the live ASX200 daily return so engineer_features()
+        # can restore return_lag_0 after any DataFrame transformations.
+        if live_row is not None:
+            live_overrides['daily_return'] = float(live_row['daily_return'].iloc[0])
+
         # Forward-fill remaining gaps (with staleness warnings)
         combined = self._ffill_with_staleness_check(combined)
 

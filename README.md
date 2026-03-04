@@ -1,6 +1,6 @@
 # AusSuperPredictor
 
-A Python desktop application that predicts the next-day direction of the ASX 200 index using a Random Forest classifier. Built with **tkinter** following the **MVVM** architectural pattern.
+A Python desktop application that predicts the next-day direction of the ASX 200 index using an XGBoost classifier. Built with **tkinter** following the **MVVM** architectural pattern.
 
 ## Features
 
@@ -10,7 +10,7 @@ A Python desktop application that predicts the next-day direction of the ASX 200
 - **Bond yield features** — yield level, daily change (diff), and AU–US yield spread
 - **Configurable OHLC field** — Investing.com sources support `price_field` to select open/high/low/close per ticker (e.g. `last_openRaw` for S&P futures to avoid look-ahead bias)
 - **42 engineered features** including lagged returns, technical indicators (RSI, MACD, EMA), volatility metrics, commodity returns, futures premium, bond yield spread, and VIX spread
-- **Random Forest classifier** with configurable hyperparameters and 80/20 time-series split
+- **XGBoost classifier** with early stopping, configurable hyperparameters and 80/20 time-series split
 - **Calibration analysis** — ECE/MCE metrics computed on the test set after each training run
 - **Confidence-based decisions** — predictions are classified as POSITIVE_EXPECTED, NEGATIVE_EXPECTED, or NEUTRAL with confidence levels (VERY_LOW → VERY_HIGH)
 - **Live intraday price** — fetches the current ASX 200 price via yfinance `^AXJO` during market hours
@@ -62,7 +62,7 @@ AusSuperPredictor/
     ├── australian_super_daily.csv # ASX 200 daily price data
     ├── asx200history.csv          # Prediction history with outcomes
     ├── performance_log.csv        # Daily performance snapshots
-    ├── model.pkl                  # Trained Random Forest model
+    ├── model.pkl                  # Trained XGBoost model
     ├── features.pkl               # Feature column names
     └── feature_names.txt          # Human-readable feature list
 ```
@@ -89,7 +89,8 @@ The app follows the **Model-View-ViewModel (MVVM)** pattern:
 |---------|---------|
 | `pandas` | Data manipulation |
 | `numpy` | Numerical operations |
-| `scikit-learn` | Random Forest classifier |
+| `scikit-learn` | Gradient Boosting classifier |
+| `xgboost` | XGBoost classifier with early stopping |
 | `yfinance` | Market indicator data & live ASX 200 price |
 | `requests` | Investing.com API calls |
 | `joblib` | Model serialisation |
@@ -132,7 +133,7 @@ python AusSuperPredictor.py --train
 ### Workflow
 
 1. **Update Data** — fetches the latest ASX 200 daily closes and market indicators
-2. **Train Model** — engineers 32 features and trains a Random Forest classifier with calibration analysis
+2. **Train Model** — engineers features and trains an XGBoost classifier with early stopping and calibration analysis
 3. **Run Prediction** — predicts next trading day direction with confidence level and decision signal
 
 Each prediction automatically:

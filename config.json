@@ -9,10 +9,13 @@
     "model": {
         "save_path": "/Users/markpinnuck/Library/Application Support/AusSuperPredictor/data/model.pkl",
         "features_save_path": "/Users/markpinnuck/Library/Application Support/AusSuperPredictor/data/features.pkl",
-        "n_estimators": 300,
-        "max_depth": 8,
-        "min_samples_split": 8,
-        "min_samples_leaf": 10,
+        "n_estimators": 1000,
+        "max_depth": 4,
+        "min_samples_split": 10,
+        "min_child_weight": 5,
+        "learning_rate": 0.01,
+        "subsample": 0.8,
+        "colsample_bytree": 0.7,
         "random_state": 42
     },
     "schedule": {

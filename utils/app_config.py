@@ -35,10 +35,13 @@ class DataConfig:
 class ModelConfig:
     save_path: str = "model.pkl"
     features_save_path: str = "features.pkl"
-    n_estimators: int = 100
-    max_depth: int = 7
+    n_estimators: int = 1000
+    max_depth: int = 4
     min_samples_split: int = 10
-    min_samples_leaf: int = 15
+    min_child_weight: int = 5
+    learning_rate: float = 0.01
+    subsample: float = 0.8
+    colsample_bytree: float = 0.7
     random_state: int = 42
 
     @classmethod
@@ -49,7 +52,10 @@ class ModelConfig:
             n_estimators=d.get("n_estimators", cls.n_estimators),
             max_depth=d.get("max_depth", cls.max_depth),
             min_samples_split=d.get("min_samples_split", cls.min_samples_split),
-            min_samples_leaf=d.get("min_samples_leaf", cls.min_samples_leaf),
+            min_child_weight=d.get("min_child_weight", cls.min_child_weight),
+            learning_rate=d.get("learning_rate", cls.learning_rate),
+            subsample=d.get("subsample", cls.subsample),
+            colsample_bytree=d.get("colsample_bytree", cls.colsample_bytree),
             random_state=d.get("random_state", cls.random_state),
         )
 

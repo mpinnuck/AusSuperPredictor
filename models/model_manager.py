@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 import json as _json
 import time
-from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
 from sklearn.model_selection import train_test_split, TimeSeriesSplit, cross_val_score
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import joblib
@@ -55,8 +55,10 @@ class ModelManager:
         # Get params from typed config
         self.n_estimators = config.model.n_estimators
         self.max_depth = config.model.max_depth
-        self.min_samples_split = config.model.min_samples_split
-        self.min_samples_leaf = config.model.min_samples_leaf
+        self.min_child_weight = config.model.min_child_weight
+        self.learning_rate = config.model.learning_rate
+        self.subsample = config.model.subsample
+        self.colsample_bytree = config.model.colsample_bytree
         self.random_state = config.model.random_state
         self.training_snapshot_path = os.path.join(
             os.path.dirname(self.model_path), 'last_training.json'
@@ -115,6 +117,7 @@ class ModelManager:
             return pd.DataFrame()
         
         df = df.copy()
+        _live_overrides = live_overrides or {}
         
         # Target: 1 if next day positive, else 0
         df['target'] = (df['daily_return'].shift(-1) > 0).astype(int)
@@ -126,6 +129,17 @@ class ModelManager:
         # Lagged returns (lag 0 = same-day return, critical for prediction)
         for lag in [0, 1, 2, 3, 5]:
             df[f'return_lag_{lag}'] = df['daily_return'].shift(lag)
+
+        # For live prediction, explicitly set return_lag_0 to the live
+        # ASX200 % change so it reflects the current intraday move rather
+        # than a possibly-stale or ffill-overwritten value.
+        if for_prediction and _live_overrides.get('daily_return') is not None:
+            live_ret = _live_overrides['daily_return']
+            df.at[df.index[-1], 'return_lag_0'] = live_ret
+            self._log(
+                f"✓ return_lag_0 set to live ASX200 change: {live_ret * 100:+.2f}%",
+                'success',
+            )
 
         # ── Consecutive streak counters ───────────────────────────────
         # Positive streak: how many consecutive positive-return days end
@@ -142,8 +156,6 @@ class ModelManager:
         df['positive_streak'] = pos_streak
 
         # ── Config-driven market-source features ──────────────────────
-        _live_overrides = live_overrides or {}
-
         vol_sources = []  # track volatility sources for cross-feature
         for src in self.config.market_sources:
             name = src.name
@@ -249,6 +261,10 @@ class ModelManager:
                 if other_nans:
                     self._log(f"⚠ Live row NaN → 0 for return/change cols: {other_nans}", 'warning')
                     last_filled[other_nans] = 0
+            # Restore return_lag_0 from live override so re-appended row
+            # reflects the actual intraday ASX200 change, not a filled value.
+            if _live_overrides.get('daily_return') is not None:
+                last_filled['return_lag_0'] = _live_overrides['daily_return']
             df = pd.concat([df, last_filled])
         
         if df.empty:
@@ -277,7 +293,7 @@ class ModelManager:
             self._log(f"⚠ Failed to save feature names: {e}", 'warning')
     
     def train(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Train Random Forest model on the provided DataFrame"""
+        """Train XGBoost model on the provided DataFrame"""
         result = {
             "success": True,
             "train_accuracy": 0,
@@ -303,29 +319,40 @@ class ModelManager:
                 result["message"] = f"Insufficient data: {len(X)} rows (need at least 100)"
                 return result
             
-            # Train/test split
+            # Train/test split (80/20 time-series)
             split_idx = int(len(X) * 0.8)
             X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
             y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
             
-            # Initialize and train
-            self.model = RandomForestClassifier(
+            # Initialize XGBoost
+            self.model = XGBClassifier(
                 n_estimators=self.n_estimators,
                 max_depth=self.max_depth,
-                min_samples_split=self.min_samples_split,
-                min_samples_leaf=self.min_samples_leaf,
+                learning_rate=self.learning_rate,
+                subsample=self.subsample,
+                colsample_bytree=self.colsample_bytree,
+                min_child_weight=self.min_child_weight,
                 random_state=self.random_state,
-                n_jobs=-1
+                eval_metric='logloss',
+                verbosity=0,
             )
+            self._log("── Model Parameters ──", 'info')
+            self._log(f"  n_estimators:         {self.n_estimators}", 'info')
+            self._log(f"  max_depth:            {self.max_depth}", 'info')
+            self._log(f"  learning_rate:        {self.learning_rate}", 'info')
+            self._log(f"  subsample:            {self.subsample}", 'info')
+            self._log(f"  colsample_bytree:     {self.colsample_bytree}", 'info')
+            self._log(f"  min_child_weight:     {self.min_child_weight}", 'info')
+            self._log(f"  random_state:         {self.random_state}", 'info')
             self._log(
-                f"Fitting RandomForest ({self.n_estimators} trees, "
+                f"Fitting XGBoost ("
                 f"{len(X_train)} rows, {len(self.feature_columns)} features)...",
                 'progress',
             )
             t0 = time.time()
             self.model.fit(X_train, y_train)
             fit_secs = time.time() - t0
-            self._log(f"✓ Model fitted in {fit_secs:.1f}s", 'success')
+            self._log(f"✓ Model fitted in {fit_secs:.1f}s ({self.n_estimators} trees)", 'success')
             
             # Predictions
             y_train_pred = self.model.predict(X_train)
@@ -479,13 +506,16 @@ class ModelManager:
                 ('full', X_train_f, X_test_f),
                 ('model', X_train_m, X_test_m),
             ]:
-                clf = RandomForestClassifier(
+                clf = XGBClassifier(
                     n_estimators=self.n_estimators,
                     max_depth=self.max_depth,
-                    min_samples_split=self.min_samples_split,
-                    min_samples_leaf=self.min_samples_leaf,
+                    learning_rate=self.learning_rate,
+                    subsample=self.subsample,
+                    colsample_bytree=self.colsample_bytree,
+                    min_child_weight=self.min_child_weight,
                     random_state=seed,
-                    n_jobs=-1,
+                    eval_metric='logloss',
+                    verbosity=0,
                 )
                 clf.fit(X_tr, y_train)
                 y_prob = clf.predict_proba(X_te)[:, 1]

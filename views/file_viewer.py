@@ -1,6 +1,6 @@
 """
 File Viewer - popup window for viewing CSV and PKL files
-Now includes tree visualization for Random Forest models.
+Now includes tree visualization for ensemble tree models (XGBoost / Gradient Boosting / Random Forest).
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext
@@ -308,7 +308,8 @@ class FileViewer:
     
     def _display_model(self, model, file_size):
         """Display model information"""
-        self.info_label.config(text=f"🤖 Random Forest Model | {file_size:.1f} KB")        
+        model_type = type(model).__name__
+        self.info_label.config(text=f"🤖 {model_type} | {file_size:.1f} KB")        
         # Switch to Summary tab for PKL files
         self.notebook.select(self.summary_frame)        
         # Model info
@@ -316,12 +317,14 @@ class FileViewer:
 
 Type: {type(model).__name__}
 Parameters:
-  • n_estimators: {model.n_estimators}
+  • n_estimators: {getattr(model, 'best_iteration', model.n_estimators)}
   • max_depth: {model.max_depth}
-  • min_samples_split: {model.min_samples_split}
-  • min_samples_leaf: {model.min_samples_leaf}
+  • learning_rate: {getattr(model, 'learning_rate', 'N/A')}
+  • subsample: {getattr(model, 'subsample', 'N/A')}
+  • colsample_bytree: {getattr(model, 'colsample_bytree', 'N/A')}
+  • min_child_weight: {getattr(model, 'min_child_weight', 'N/A')}
   • features: {model.n_features_in_}
-  • classes: {model.classes_}
+  • classes: {list(model.classes_)}
 
 """
         self.summary_text.insert('1.0', info)
@@ -408,14 +411,28 @@ Parameters:
         ctrl_frame = ttk.Frame(self.tree_vis_frame)
         ctrl_frame.pack(fill=tk.X, padx=5, pady=5)
 
+        # XGBoost: get_booster().trees_to_dataframe() for tree access
+        # sklearn GB: estimators_ is (n_estimators, n_classes) 2D array
+        # sklearn RF: estimators_ is a flat list
+        if hasattr(model, 'get_booster'):
+            # XGBoost model — use get_booster() for tree count
+            booster = model.get_booster()
+            n_trees = int(booster.num_boosted_rounds())
+        else:
+            est = model.estimators_
+            if hasattr(est, 'shape') and est.ndim == 2:
+                n_trees = est.shape[0]
+            else:
+                n_trees = len(est)
+
         ttk.Label(ctrl_frame, text="Tree index:").pack(side=tk.LEFT)
         tree_var = tk.IntVar(value=0)
         tree_spin = ttk.Spinbox(
-            ctrl_frame, from_=0, to=len(model.estimators_) - 1,
+            ctrl_frame, from_=0, to=n_trees - 1,
             textvariable=tree_var, width=5
         )
         tree_spin.pack(side=tk.LEFT, padx=5)
-        ttk.Label(ctrl_frame, text=f"of {len(model.estimators_)}").pack(side=tk.LEFT)
+        ttk.Label(ctrl_frame, text=f"of {n_trees}").pack(side=tk.LEFT)
 
         depth_label = ttk.Label(ctrl_frame, text="Max depth shown:")
         depth_label.pack(side=tk.LEFT, padx=(15, 0))
@@ -436,16 +453,34 @@ Parameters:
             max_d = depth_var.get()
             fig.clear()
             ax = fig.add_subplot(111)
-            _plot_tree(
-                model.estimators_[idx],
-                feature_names=self.feature_names if self.feature_names else None,
-                class_names=['Down', 'Up'],
-                filled=True,
-                rounded=True,
-                max_depth=max_d,
-                fontsize=7,
-                ax=ax
-            )
+            if hasattr(model, 'get_booster'):
+                # XGBoost: plot via xgboost's plot_tree
+                try:
+                    from xgboost import plot_tree as xgb_plot_tree
+                    xgb_plot_tree(
+                        model, num_trees=idx, ax=ax,
+                        fmap='', rankdir='TB',
+                    )
+                except Exception:
+                    ax.text(0.5, 0.5, f'Tree {idx} (XGBoost plot unavailable)',
+                            ha='center', va='center', transform=ax.transAxes)
+            else:
+                # sklearn GB / RF tree visualization
+                est = model.estimators_
+                if hasattr(est, 'shape') and est.ndim == 2:
+                    tree = est[idx, 0]
+                else:
+                    tree = est[idx]
+                _plot_tree(
+                    tree,
+                    feature_names=self.feature_names if self.feature_names else None,
+                    class_names=['Down', 'Up'],
+                    filled=True,
+                    rounded=True,
+                    max_depth=max_d,
+                    fontsize=7,
+                    ax=ax,
+                )
             ax.set_title(f"Tree {idx} (showing depth {max_d})", fontsize=10)
             fig.tight_layout()
             canvas.draw()
