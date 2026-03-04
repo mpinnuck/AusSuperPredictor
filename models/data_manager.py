@@ -586,10 +586,11 @@ class DataManager:
             }, index=pd.DatetimeIndex([live_date], name='date'))
 
             intraday_chg = live_return * 100
+            chg_level = 'success' if live_return >= 0 else 'error'
             self._log(
                 f"✓ Live ASX200: {live_price:,.2f} ({intraday_chg:+.2f}%) "
                 f"as of {today} [{source_label}]",
-                'success'
+                chg_level
             )
             return live_row
 
@@ -669,7 +670,7 @@ class DataManager:
                             self._log(
                                 f"✓ Live {name}: {live_price:,.4f} "
                                 f"({live_pct*100:+.2f}%) [page]",
-                                'success',
+                                'success' if live_pct >= 0 else 'error',
                             )
 
                     # ── 2. Fallback: chart + daily API ─────────────────
@@ -719,7 +720,7 @@ class DataManager:
                         self._log(
                             f"✓ Live {name}: {live_price:,.4f} "
                             f"({live_pct*100:+.2f}%) [api fallback]",
-                            'success',
+                            'success' if live_pct >= 0 else 'error',
                         )
 
                     if live_price is not None:
@@ -751,7 +752,8 @@ class DataManager:
                         'chg': None,
                         'category': src.category or 'commodity',
                     }
-                    self._log(f"✓ Live {name}: {price:,.4f} ({pct*100:+.2f}%)", 'success')
+                    self._log(f"✓ Live {name}: {price:,.4f} ({pct*100:+.2f}%)",
+                              'success' if pct >= 0 else 'error')
             except Exception as e:
                 self._log(f"⚠ Live fetch failed for {name}: {e}", 'warning')
 

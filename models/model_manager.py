@@ -22,7 +22,7 @@ def get_max_rolling_lag_window(config: AppConfig) -> int:
     Includes lagged returns and config-driven technical indicators.
     """
     # Lagged returns (hardcoded in engineer_features)
-    lagged_lags = [1, 2, 3, 5]
+    lagged_lags = [0, 1, 2, 3, 5]
     max_lag = max(lagged_lags) if lagged_lags else 0
 
     # Technical indicators
@@ -123,23 +123,23 @@ class ModelManager:
         if not for_prediction:
             df = df.iloc[:-1]
         
-        # Lagged returns
-        for lag in [1, 2, 3, 5]:
+        # Lagged returns (lag 0 = same-day return, critical for prediction)
+        for lag in [0, 1, 2, 3, 5]:
             df[f'return_lag_{lag}'] = df['daily_return'].shift(lag)
 
-        # ── Consecutive positive-day streak ───────────────────────────
-        # Count how many consecutive positive return days end at each row.
-        # Historically, reversal probability shifts notably after 6-7 days.
+        # ── Consecutive streak counters ───────────────────────────────
+        # Positive streak: how many consecutive positive-return days end
+        # at each row.  Reversal probability shifts after 6-7 days.
         positive = (df['daily_return'] > 0).astype(int).values
-        streak = np.zeros(len(positive), dtype=int)
+        pos_streak = np.zeros(len(positive), dtype=int)
         count = 0
         for i in range(len(positive)):
             if positive[i] == 1:
                 count += 1
             else:
                 count = 0
-            streak[i] = count
-        df['positive_streak'] = streak
+            pos_streak[i] = count
+        df['positive_streak'] = pos_streak
 
         # ── Config-driven market-source features ──────────────────────
         _live_overrides = live_overrides or {}

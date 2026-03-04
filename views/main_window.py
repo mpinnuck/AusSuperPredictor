@@ -9,6 +9,7 @@ from PIL import Image, ImageTk
 from views.log_panel import LogPanel
 from views.performance_panel import PerformancePanel
 from views.ablation_panel import AblationPanel
+from views.app_log_panel import AppLogPanel
 from viewmodels.main_viewmodel import MainViewModel
 
 class MainWindow:
@@ -256,7 +257,13 @@ class MainWindow:
         )
         self.ablation_panel.pack(fill=tk.BOTH, expand=True)
         
-        # Auto-refresh performance data when switching to the Performance tab
+        # App Log tab
+        app_log_tab = ttk.Frame(self.notebook)
+        self.notebook.add(app_log_tab, text='  App Log  ')
+        self.app_log_panel = AppLogPanel(app_log_tab)
+        self.app_log_panel.pack(fill=tk.BOTH, expand=True)
+        
+        # Auto-refresh data when switching tabs
         self.notebook.bind('<<NotebookTabChanged>>', self._on_tab_changed)
     
     def _get_countdown_string(self):
@@ -382,10 +389,12 @@ class MainWindow:
         self.perf_panel.refresh_btn.config(state=tk.NORMAL)
     
     def _on_tab_changed(self, event):
-        """Auto-refresh performance data when switching to the Performance tab."""
+        """Auto-refresh data when switching tabs."""
         selected = self.notebook.index(self.notebook.select())
-        if selected == 1:  # Performance tab index
+        if selected == 1:  # Performance tab
             self._refresh_performance()
+        elif selected == 3:  # App Log tab
+            self.app_log_panel.load_log()
     
     def update_ui(self):
         """Update UI based on ViewModel state (called when state changes)"""

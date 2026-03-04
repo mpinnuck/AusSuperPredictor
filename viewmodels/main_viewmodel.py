@@ -460,7 +460,8 @@ class MainViewModel:
         self.log_queue.put(f"\n{'='*50}", 'info')
         self.log_queue.put(
             f"ASX200: {latest_price:,.2f} ({latest_date_str}) "
-            f"{latest_return:+.2f}%", 'info',
+            f"{latest_return:+.2f}%",
+            'success' if latest_return >= 0 else 'error',
         )
         self.log_queue.put(f"Prediction for: {prediction_date_str}", 'info')
         self.log_queue.put(
