@@ -49,7 +49,7 @@ class PerformancePanel(tk.Frame):
 
     # ── Public render method ─────────────────────────────────────
 
-    def render(self, perf: dict | None, thresholds=None, drift: bool = False, perf_log=None):
+    def render(self, perf: dict | None, thresholds=None, drift: bool = False, perf_log=None, history_path: str | None = None):
         """Render the full performance dashboard.
 
         Args:
@@ -57,7 +57,9 @@ class PerformancePanel(tk.Frame):
             thresholds: DataFrame from analyze_thresholds() or None
             drift: True if model drift was detected
             perf_log: DataFrame from get_performance_log() or None
+            history_path: absolute path to the asx200history.csv file
         """
+        self._history_path = history_path
         self.text.config(state=tk.NORMAL)
         self.text.delete('1.0', tk.END)
 
@@ -191,7 +193,7 @@ class PerformancePanel(tk.Frame):
         import os
         import pandas as pd
 
-        path = 'data/asx200history.csv'
+        path = getattr(self, '_history_path', None) or 'data/asx200history.csv'
         if not os.path.exists(path):
             self._put("  No history file found.\n", 'dim')
             return
@@ -220,7 +222,12 @@ class PerformancePanel(tk.Frame):
             success = row.get('success', float('nan'))
             result_label = str(row.get('result_label', ''))
 
-            prob_str = f"{prob*100:.0f}%" if not _isnan(prob) else '  —'
+            # Show the confidence in the predicted direction, not always positive prob
+            if not _isnan(prob):
+                display_prob = prob if prob >= 0.5 else (1 - prob)
+                prob_str = f"{display_prob*100:.0f}%"
+            else:
+                prob_str = '  —'
             ret_str = f"{ret*100:>+7.2f}%" if not _isnan(ret) else '      —'
 
             if _isnan(success):

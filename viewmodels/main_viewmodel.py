@@ -686,4 +686,8 @@ class MainViewModel:
             perf_log = self.data_manager.get_performance_log()
         except Exception:
             perf_log = None
-        return {"perf": perf, "thresholds": thresholds, "drift": drift, "perf_log": perf_log}
+        return {
+            "perf": perf, "thresholds": thresholds, "drift": drift,
+            "perf_log": perf_log,
+            "history_path": self.data_manager.HISTORY_PATH,
+        }

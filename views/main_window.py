@@ -385,6 +385,7 @@ class MainWindow:
             thresholds=data.get('thresholds'),
             drift=data.get('drift', False),
             perf_log=data.get('perf_log'),
+            history_path=data.get('history_path'),
         )
         self.perf_panel.refresh_btn.config(state=tk.NORMAL)
     
