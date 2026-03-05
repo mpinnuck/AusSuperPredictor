@@ -1,12 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import xgboost, os as _os
+_xgb_dir = _os.path.dirname(xgboost.__file__)
+_xgb_lib = _os.path.join(_xgb_dir, 'lib', 'libxgboost.dylib')
+_xgb_ver = _os.path.join(_xgb_dir, 'VERSION')
+
 a = Analysis(
     ['AusSuperPredictor.py'],
     pathex=[],
-    binaries=[],
-    datas=[],
-    hiddenimports=[],
+    binaries=[(_xgb_lib, 'xgboost/lib')],
+    datas=[(_xgb_ver, 'xgboost')],
+    hiddenimports=['xgboost', 'xgboost.core', 'xgboost.tracker'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
