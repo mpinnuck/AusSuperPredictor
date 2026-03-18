@@ -18,14 +18,25 @@ logger = logging.getLogger(__name__)
 
 
 def _load_dotenv() -> None:
-    """Load a .env file from cwd (primary) or source tree (fallback)."""
+    """Load a .env file from multiple locations.
+    
+    Checks in order:
+    1. Current working directory (primary - for bundled app in Application Support)
+    2. Source tree (for development mode)
+    3. Home directory (for manual placement)
+    """
     candidates = [
-        Path.cwd() / ".env",
-        Path(__file__).resolve().parent.parent / ".env",
+        Path.cwd() / ".env",                                       # Current working directory
+        Path(__file__).resolve().parent.parent / ".env",           # Source tree
+        Path.home() / ".env",                                       # Home directory
     ]
+    
     env_path = next((p for p in candidates if p.is_file()), None)
     if env_path is None:
+        logger.debug(f"No .env file found in: {', '.join(str(p) for p in candidates)}")
         return
+    
+    logger.debug(f"Loading .env from: {env_path}")
     with open(env_path) as f:
         for line in f:
             line = line.strip()
@@ -54,21 +65,9 @@ def send_prediction_email(config, prediction_data: dict) -> bool:
     bool
         True if the email was sent successfully.
     """
-    email_cfg = config.email
-    if not email_cfg.enabled:
-        return False
-
-    _load_dotenv()
-
-    smtp_server = email_cfg.smtp_server or "smtp.gmail.com"
-    smtp_port = email_cfg.smtp_port
-    username = os.environ.get("ASP_EMAIL_USERNAME", email_cfg.username or email_cfg.from_addr)
-    password = os.environ.get("ASP_EMAIL_PASSWORD", email_cfg.password)
-    email_from = email_cfg.from_addr or username
-    email_to = email_cfg.to
-
-    if not all([smtp_server, username, password, email_to]):
-        logger.warning("Email not configured — skipping send.")
+    creds = _get_smtp_credentials(config)
+    if creds is None:
+        logger.debug("Email credentials not available — skipping prediction email")
         return False
 
     # ── Build email content ──────────────────────────────────────
@@ -181,26 +180,11 @@ def send_prediction_email(config, prediction_data: dict) -> bool:
 </html>
 """
 
-    # ── Send ─────────────────────────────────────────────────────
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = email_from
-    msg["To"] = email_to
-    msg.attach(MIMEText(plain_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
-
-    try:
-        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            server.login(username, password)
-            server.sendmail(email_from, [email_to], msg.as_string())
-        logger.info("Prediction email sent to %s", email_to)
-        return True
-    except Exception as exc:
-        logger.warning("Failed to send prediction email: %s", exc)
-        return False
+    # ── Send using helper ────────────────────────────────────────
+    sent = _send(creds, subject, plain_body, html_body)
+    if sent:
+        logger.info("Prediction email sent to %s", creds["email_to"])
+    return sent
 
 
 def _get_smtp_credentials(config):
@@ -243,15 +227,22 @@ def _send(creds: dict, subject: str, plain_body: str, html_body: str) -> bool:
     msg.attach(MIMEText(html_body, "html"))
 
     try:
+        logger.info(f"Connecting to SMTP server {creds['smtp_server']}:{creds['smtp_port']}...")
         with smtplib.SMTP(creds["smtp_server"], creds["smtp_port"], timeout=30) as server:
+            logger.info("Connected. Sending EHLO...")
             server.ehlo()
+            logger.info("Upgrading connection to TLS...")
             server.starttls()
             server.ehlo()
+            logger.info(f"Logging in as {creds['username']}...")
             server.login(creds["username"], creds["password"])
+            logger.info(f"Sending email from {creds['email_from']} to {creds['email_to']}...")
             server.sendmail(creds["email_from"], [creds["email_to"]], msg.as_string())
+        logger.info(f"Email sent successfully to {creds['email_to']}")
         return True
     except Exception as exc:
         logger.warning("Failed to send email: %s", exc)
+        logger.warning(f"  Server: {creds['smtp_server']}:{creds['smtp_port']}, From: {creds['email_from']}, To: {creds['email_to']}")
         return False
 
 
@@ -274,6 +265,7 @@ def send_training_email(config, training_data: dict) -> bool:
     """
     creds = _get_smtp_credentials(config)
     if creds is None:
+        logger.debug("Email credentials not available — skipping training email")
         return False
 
     train_acc = training_data["train_accuracy"]

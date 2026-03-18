@@ -28,9 +28,10 @@
         "enabled": true,
         "smtp_server": "smtp.gmail.com",
         "smtp_port": 587,
-        "from": "mark.pinnuck@gmail.com",
+        "username": "mark.pinnuck@gmail.com",
+        "password": "",
         "to": "mgpinnuck@gmail.com",
-        "username": "mark.pinnuck@gmail.com"
+        "from": "mark.pinnuck@gmail.com"
     },
     "market_sources": [
         {
@@ -145,7 +146,15 @@
         }
     ],
     "technical_indicators": [
-        {"type": "macd", "fast": 12, "slow": 26, "signal": 9},
-        {"type": "rsi", "period": 14}
+        {
+            "type": "macd",
+            "fast": 12,
+            "slow": 26,
+            "signal": 9
+        },
+        {
+            "type": "rsi",
+            "period": 14
+        }
     ]
 }

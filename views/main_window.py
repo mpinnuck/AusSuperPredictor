@@ -171,6 +171,14 @@ class MainWindow:
             top_frame, textvariable=self.email_pass_var, width=30, show='•')
         email_pass_entry.grid(row=9, column=1, sticky='w', padx=5, pady=2)
 
+        self.email_test_btn = ttk.Button(
+            top_frame,
+            text="Email Prediction",
+            command=self._on_test_email_clicked,
+            width=12
+        )
+        self.email_test_btn.grid(row=9, column=2, padx=5, pady=2)
+
         ttk.Label(top_frame, text="Email to:").grid(
             row=10, column=0, sticky='e', padx=5, pady=2)
         self.email_to_var = tk.StringVar(
@@ -322,6 +330,23 @@ class MainWindow:
         enabled = self.email_enabled_var.get()
         self.viewmodel.save_email_credentials(
             username, password, email_to=email_to, enabled=enabled)
+
+    def _on_test_email_clicked(self):
+        """Send a test email to verify configuration."""
+        username = self.email_user_var.get().strip()
+        password = self.email_pass_var.get().strip()
+        email_to = self.email_to_var.get().strip()
+        
+        if not all([username, password, email_to]):
+            self.log_panel.log("⚠ Please configure email settings first (user, password, and recipient)", 'warning')
+            return
+        
+        # Save settings first to ensure they're available to the email sender
+        self.viewmodel.save_email_credentials(
+            username, password, email_to=email_to, enabled=True)
+        
+        # Send test email
+        self.viewmodel.test_email_async()
 
     def _on_browse_data_folder(self):
         """Open a folder picker for the data directory."""

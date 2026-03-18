@@ -1,2 +1,2 @@
 # Single source of truth for the application version.
-VERSION = "6.0.0"
+VERSION = "6.1.0"

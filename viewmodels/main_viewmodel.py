@@ -61,19 +61,20 @@ class MainViewModel:
     # ── Email credential helpers (.env) ────────────────────────
 
     def _env_path(self) -> "Path":
-        """Return the .env file path.
+        """Return the .env file path for reading or writing.
 
-        cwd is the primary location (set to App Support for frozen builds,
-        project dir for dev).  Source-relative is a read-only fallback.
+        For reading: checks cwd (App Support), source tree, then home directory.
+        For writing: defaults to cwd (App Support for bundled, project dir for dev).
         """
         from pathlib import Path
-        primary = Path.cwd() / ".env"
-        if primary.is_file():
-            return primary
-        fallback = Path(__file__).resolve().parent.parent / ".env"
-        if fallback.is_file():
-            return fallback
-        return primary  # default to cwd for creation
+        # Check multiple locations for reading
+        for candidate in [Path.cwd() / ".env", 
+                         Path(__file__).resolve().parent.parent / ".env",
+                         Path.home() / ".env"]:
+            if candidate.is_file():
+                return candidate
+        # Default to cwd for creation/writing
+        return Path.cwd() / ".env"
 
     def load_email_credentials(self) -> dict:
         """Read ASP_EMAIL_USERNAME / ASP_EMAIL_PASSWORD from .env."""
@@ -136,6 +137,22 @@ class MainViewModel:
             pass
 
         self.log_queue.put("✓ Email settings saved", 'success')
+
+    def test_email_async(self):
+        """Run CLI predict command asynchronously (same as command-line --predict)."""
+        def worker():
+            try:
+                self.log_queue.put("Running prediction with email (CLI mode)...", 'info')
+                success = self.run_predict(event_notes="[TEST EMAIL]")
+                if success:
+                    self.log_queue.put("✓ Test prediction completed and email sent", 'success')
+                else:
+                    self.log_queue.put("⚠ Test prediction failed. Check logs.", 'warning')
+            except Exception as e:
+                self.log_queue.put(f"✗ Error running test prediction: {e}", 'error')
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
 
     def update_data_folder(self, new_folder: str):
         """Update data folder path, re-derive all file paths, and save config."""
@@ -552,9 +569,11 @@ class MainViewModel:
                     "feature_details": feature_details,
                 })
                 if sent:
-                    self.log_queue.put("Prediction emailed.", 'info')
+                    self.log_queue.put("✓ Prediction emailed.", 'success')
+                else:
+                    self.log_queue.put("⚠ Email send returned False (check credentials and launchd environment)", 'warning')
             except Exception as e:
-                self.log_queue.put(f"Email send failed: {e}", 'warning')
+                self.log_queue.put(f"✗ Email send failed: {e}", 'error')
 
         # ── Save daily performance snapshot ─────────────────────
         try:
@@ -622,9 +641,11 @@ class MainViewModel:
                     "prev": prev,
                 })
                 if sent:
-                    self.log_queue.put("Training results emailed.", 'info')
+                    self.log_queue.put("✓ Training results emailed.", 'success')
+                else:
+                    self.log_queue.put("⚠ Email send returned False (check credentials and launchd environment)", 'warning')
             except Exception as e:
-                self.log_queue.put(f"Email send failed: {e}", 'warning')
+                self.log_queue.put(f"✗ Email send failed: {e}", 'error')
 
             return True
         except Exception as e:
