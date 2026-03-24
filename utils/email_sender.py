@@ -84,11 +84,12 @@ def send_prediction_email(config, prediction_data: dict) -> bool:
     features = prediction_data.get("feature_details", [])[:15]
 
     direction = "UP" if prob > 0.5 else "DOWN"
+    dir_prob = prob if prob > 0.5 else 1 - prob
     colour = "#2e7d32" if prob > 0.5 else "#c62828"
 
     subject = (
         f"ASX200 Prediction {pred_date}: {direction} "
-        f"({prob*100:.1f}%) — {confidence}"
+        f"({dir_prob*100:.1f}%) — {confidence}"
     )
 
     # Plain-text fallback

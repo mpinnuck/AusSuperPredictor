@@ -8,10 +8,28 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from datetime import datetime, timedelta, date
 from typing import Optional, Dict, Any, Tuple
 from utils.time_utils import SydneyTimeUtils
 from utils.app_config import AppConfig, MarketSource
+
+def _requests_session(retries=2, backoff=1.0, timeout=30):
+    """Return a requests Session with automatic retry on transient errors."""
+    s = requests.Session()
+    adapter = HTTPAdapter(
+        max_retries=Retry(
+            total=retries,
+            backoff_factor=backoff,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+    )
+    s.mount('https://', adapter)
+    s.mount('http://', adapter)
+    s.timeout = timeout
+    return s
+
 
 class DataManager:
     """Manages all data operations - AustralianSuper and market data"""
@@ -541,7 +559,8 @@ class DataManager:
                     "https://api.investing.com/api/financialdata/171"
                     "/historical/chart/?period=P1D&interval=PT5M&pointscount=60"
                 )
-                chart_resp = req.get(chart_url, headers=api_headers, timeout=15)
+                sess = _requests_session()
+                chart_resp = sess.get(chart_url, headers=api_headers, timeout=30)
                 chart_resp.raise_for_status()
                 candles = chart_resp.json().get('data', [])
                 if candles:
@@ -653,7 +672,8 @@ class DataManager:
                                 'Chrome/120.0.0.0 Safari/537.36'
                             ),
                         }
-                        page_resp = req.get(page_url, headers=page_headers, timeout=15)
+                        sess = _requests_session()
+                        page_resp = sess.get(page_url, headers=page_headers, timeout=30)
                         page_resp.raise_for_status()
                         html = page_resp.text
 
@@ -683,7 +703,8 @@ class DataManager:
                             f"https://api.investing.com/api/financialdata/{live_ticker}"
                             f"/historical/chart/?period=P1D&interval=PT5M&pointscount=60"
                         )
-                        chart_resp = req.get(chart_url, headers=api_headers, timeout=15)
+                        sess = _requests_session()
+                        chart_resp = sess.get(chart_url, headers=api_headers, timeout=30)
                         chart_resp.raise_for_status()
                         candles = chart_resp.json().get('data', [])
 
@@ -695,7 +716,7 @@ class DataManager:
                             f"&end-date={today.strftime('%Y-%m-%d')}"
                             f"&time-frame=Daily&add-missing-rows=false"
                         )
-                        daily_resp = req.get(daily_url, headers=api_headers, timeout=15)
+                        daily_resp = sess.get(daily_url, headers=api_headers, timeout=30)
                         daily_resp.raise_for_status()
                         daily_data = daily_resp.json().get('data', [])
 
