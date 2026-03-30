@@ -35,14 +35,20 @@ class DataConfig:
 class ModelConfig:
     save_path: str = "model.pkl"
     features_save_path: str = "features.pkl"
-    n_estimators: int = 1000
-    max_depth: int = 4
+    n_estimators: int = 500
+    max_depth: int = 3
     min_samples_split: int = 10
-    min_child_weight: int = 5
-    learning_rate: float = 0.01
-    subsample: float = 0.8
-    colsample_bytree: float = 0.7
+    min_child_weight: int = 10
+    learning_rate: float = 0.05
+    subsample: float = 0.7
+    colsample_bytree: float = 0.6
+    gamma: float = 1.0
+    reg_alpha: float = 0.1
+    reg_lambda: float = 2.0
     random_state: int = 42
+    early_stopping_rounds: int = 50
+    feature_selection_threshold: float = 0.005
+    target_threshold: float = 0.0
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ModelConfig":
@@ -56,7 +62,13 @@ class ModelConfig:
             learning_rate=d.get("learning_rate", cls.learning_rate),
             subsample=d.get("subsample", cls.subsample),
             colsample_bytree=d.get("colsample_bytree", cls.colsample_bytree),
+            gamma=d.get("gamma", cls.gamma),
+            reg_alpha=d.get("reg_alpha", cls.reg_alpha),
+            reg_lambda=d.get("reg_lambda", cls.reg_lambda),
             random_state=d.get("random_state", cls.random_state),
+            early_stopping_rounds=d.get("early_stopping_rounds", cls.early_stopping_rounds),
+            feature_selection_threshold=d.get("feature_selection_threshold", cls.feature_selection_threshold),
+            target_threshold=d.get("target_threshold", cls.target_threshold),
         )
 
 

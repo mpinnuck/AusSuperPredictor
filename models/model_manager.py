@@ -25,6 +25,9 @@ def get_max_rolling_lag_window(config: AppConfig) -> int:
     lagged_lags = [0, 1, 2, 3, 5]
     max_lag = max(lagged_lags) if lagged_lags else 0
 
+    # Rolling momentum/volatility windows
+    rolling_windows = [5, 20]
+
     # Technical indicators
     indicators = config.technical_indicators
     if not indicators:
@@ -33,7 +36,7 @@ def get_max_rolling_lag_window(config: AppConfig) -> int:
             TechnicalIndicator(type='macd', fast=12, slow=26, signal=9),
             TechnicalIndicator(type='rsi', period=14),
         ]
-    max_window = max_lag
+    max_window = max(max_lag, *rolling_windows)
     for ind in indicators:
         if ind.type == 'macd':
             max_window = max(max_window, ind.fast or 12, ind.slow or 26, ind.signal or 9)
@@ -59,7 +62,13 @@ class ModelManager:
         self.learning_rate = config.model.learning_rate
         self.subsample = config.model.subsample
         self.colsample_bytree = config.model.colsample_bytree
+        self.gamma = config.model.gamma
+        self.reg_alpha = config.model.reg_alpha
+        self.reg_lambda = config.model.reg_lambda
         self.random_state = config.model.random_state
+        self.early_stopping_rounds = config.model.early_stopping_rounds
+        self.feature_selection_threshold = config.model.feature_selection_threshold
+        self.target_threshold = config.model.target_threshold
         self.training_snapshot_path = os.path.join(
             os.path.dirname(self.model_path), 'last_training.json'
         )
@@ -119,8 +128,18 @@ class ModelManager:
         df = df.copy()
         _live_overrides = live_overrides or {}
         
-        # Target: 1 if next day positive, else 0
-        df['target'] = (df['daily_return'].shift(-1) > 0).astype(int)
+        # Target: 1 if next-day return exceeds threshold, else 0.
+        # A positive threshold creates a "dead zone" that filters out
+        # tiny, noisy moves near zero — giving the model a cleaner signal.
+        next_return = df['daily_return'].shift(-1)
+        if self.target_threshold > 0 and not for_prediction:
+            # Exclude rows where next-day return is within the dead zone
+            outside_deadzone = next_return.abs() >= self.target_threshold
+            df['target'] = (next_return > 0).astype(int)
+            df['_in_deadzone'] = ~outside_deadzone
+        else:
+            df['target'] = (next_return > 0).astype(int)
+            df['_in_deadzone'] = False
         
         # Remove last row only for training (no target available)
         if not for_prediction:
@@ -154,6 +173,28 @@ class ModelManager:
                 count = 0
             pos_streak[i] = count
         df['positive_streak'] = pos_streak
+
+        # ── Momentum & volatility regime features ─────────────────────
+        # Rolling realized volatility (5-day and 20-day)
+        df['volatility_5d'] = df['daily_return'].rolling(5).std()
+        df['volatility_20d'] = df['daily_return'].rolling(20).std()
+        # Volatility ratio: is short-term vol expanding or contracting?
+        df['vol_ratio'] = df['volatility_5d'] / df['volatility_20d'].replace(0, np.nan)
+
+        # Momentum: cumulative return over trailing windows
+        df['momentum_5d'] = df['daily_return'].rolling(5).sum()
+        df['momentum_20d'] = df['daily_return'].rolling(20).sum()
+
+        # Mean-reversion signal: deviation of current return from 20d mean
+        rolling_mean_20 = df['daily_return'].rolling(20).mean()
+        df['return_zscore'] = (
+            (df['daily_return'] - rolling_mean_20)
+            / df['volatility_20d'].replace(0, np.nan)
+        )
+
+        # Day-of-week (known calendar effect)
+        if hasattr(df.index, 'dayofweek'):
+            df['day_of_week'] = df.index.dayofweek
 
         # ── Config-driven market-source features ──────────────────────
         vol_sources = []  # track volatility sources for cross-feature
@@ -194,7 +235,42 @@ class ModelManager:
         # Cross-source: spread between first two volatility sources
         if len(vol_sources) >= 2 and all(v in df.columns for v in vol_sources[:2]):
             df['vix_spread'] = df[vol_sources[1]] - df[vol_sources[0]]
-        
+
+        # ── Cross-market regime features ──────────────────────────
+        # Rolling 20-day correlation between AUD/USD and gold
+        # (safe-haven correlation breaks down during regime shifts)
+        if 'audusd_return' in df.columns and 'gold_return' in df.columns:
+            df['corr_audusd_gold_20d'] = (
+                df['audusd_return']
+                .rolling(20)
+                .corr(df['gold_return'])
+            )
+
+        # Rolling 20-day correlation between ASX futures return and VIX change
+        asx_ret_col = next(
+            (f'{s.name}_return' for s in self.config.market_sources
+             if s.name == 'asx_futures' and f'{s.name}_return' in df.columns),
+            None,
+        )
+        vix_chg_col = next(
+            (f'{s.name}_change' for s in self.config.market_sources
+             if s.name == 'vix' and f'{s.name}_change' in df.columns),
+            None,
+        )
+        if asx_ret_col and vix_chg_col:
+            df['corr_asx_vix_20d'] = (
+                df[asx_ret_col].rolling(20).corr(df[vix_chg_col])
+            )
+
+        # VIX regime: high-vol regime when VIX > 20-day rolling median
+        if 'vix_level' in df.columns:
+            vix_median_20 = df['vix_level'].rolling(20).median()
+            df['vix_regime'] = (df['vix_level'] > vix_median_20).astype(int)
+
+        # Yield curve momentum: 5-day change in yield spread
+        if 'yield_spread' in df.columns:
+            df['yield_spread_momentum'] = df['yield_spread'].diff(5)
+
         # ── Config-driven technical indicators ────────────────────
         indicators = self.config.technical_indicators
         if not indicators:
@@ -277,8 +353,90 @@ class ModelManager:
     def get_feature_columns(self, df: pd.DataFrame) -> List[str]:
         """Get list of feature columns (exclude target, identifiers, and raw market source columns)"""
         raw_source_names = {s.name for s in self.config.market_sources}
-        exclude_cols = {'target', 'daily_return', 'price'} | raw_source_names
+        exclude_cols = {'target', 'daily_return', 'price', '_in_deadzone'} | raw_source_names
         return [col for col in df.columns if col not in exclude_cols]
+
+    def _select_features(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        *other_sets: pd.DataFrame,
+    ) -> tuple:
+        """Drop features with importance below threshold using a quick preliminary fit.
+
+        Accepts an arbitrary number of additional DataFrames (val, test)
+        and returns them all filtered to the same column subset.
+        """
+        self._log("── Feature Selection ───────────────────────", 'info')
+        prelim = XGBClassifier(
+            n_estimators=100,
+            max_depth=self.max_depth,
+            learning_rate=0.1,
+            subsample=self.subsample,
+            colsample_bytree=self.colsample_bytree,
+            min_child_weight=self.min_child_weight,
+            gamma=self.gamma,
+            reg_alpha=self.reg_alpha,
+            reg_lambda=self.reg_lambda,
+            random_state=self.random_state,
+            eval_metric='logloss',
+            verbosity=0,
+        )
+        prelim.fit(X_train, y_train)
+
+        importances = pd.Series(prelim.feature_importances_, index=X_train.columns)
+        # Always drop zero-importance features, plus those below threshold
+        effective_threshold = max(self.feature_selection_threshold, 1e-8)
+        keep = importances[importances >= effective_threshold].index.tolist()
+        dropped = importances[importances < effective_threshold].index.tolist()
+
+        if dropped:
+            self._log(
+                f"  Dropped {len(dropped)} low-importance features "
+                f"(threshold={self.feature_selection_threshold}): "
+                f"{', '.join(dropped[:8])}"
+                f"{'...' if len(dropped) > 8 else ''}",
+                'info',
+            )
+        self._log(f"  Keeping {len(keep)} of {len(X_train.columns)} features", 'info')
+        self._log("────────────────────────────────────────────", 'info')
+
+        self.feature_columns = keep
+        return (X_train[keep],) + tuple(s[keep] for s in other_sets)
+
+    def _log_baseline_comparison(
+        self, y_test: pd.Series, model_accuracy: float
+    ) -> None:
+        """Log naive baseline comparisons against the model's test accuracy."""
+        self._log("── Baseline Comparison ─────────────────────", 'info')
+
+        # Baseline 1: always predict the majority class
+        majority_class = int(y_test.mode().iloc[0])
+        majority_acc = float((y_test == majority_class).mean())
+        delta_maj = model_accuracy - majority_acc
+        self._log(
+            f"  Always-majority ({majority_class}):  {majority_acc:.3f}  "
+            f"(model {delta_maj:+.3f})",
+            'info',
+        )
+
+        # Baseline 2: predict same as yesterday (persistence)
+        y_persist = y_test.shift(1)
+        valid = y_persist.notna()
+        if valid.sum() > 0:
+            persist_acc = float((y_test[valid] == y_persist[valid]).mean())
+            delta_per = model_accuracy - persist_acc
+            self._log(
+                f"  Same-as-yesterday:    {persist_acc:.3f}  "
+                f"(model {delta_per:+.3f})",
+                'info',
+            )
+
+        self._log(
+            f"  XGBoost model:        {model_accuracy:.3f}",
+            'info',
+        )
+        self._log("────────────────────────────────────────────", 'info')
     
     def save_feature_names(self, feature_names: List[str]) -> None:
         """Save feature names separately for better model viewing"""
@@ -319,10 +477,46 @@ class ModelManager:
                 result["message"] = f"Insufficient data: {len(X)} rows (need at least 100)"
                 return result
             
-            # Train/test split (80/20 time-series)
-            split_idx = int(len(X) * 0.8)
-            X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-            y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+            # Train/val/test split (70/10/20 time-series)
+            # Validation set is used ONLY for early stopping;
+            # test set remains truly unseen.
+            test_idx = int(len(X) * 0.8)
+            val_idx = int(len(X) * 0.7)
+            X_train, X_val, X_test = (
+                X.iloc[:val_idx], X.iloc[val_idx:test_idx], X.iloc[test_idx:]
+            )
+            y_train, y_val, y_test = (
+                y.iloc[:val_idx], y.iloc[val_idx:test_idx], y.iloc[test_idx:]
+            )
+
+            # Drop dead-zone rows from train and val (not test —
+            # test must reflect real-world where we predict every day)
+            if '_in_deadzone' in df.columns and self.target_threshold > 0:
+                dz = df['_in_deadzone']
+                dz_train = dz.iloc[:val_idx]
+                dz_val = dz.iloc[val_idx:test_idx]
+                train_keep = ~dz_train.values
+                val_keep = ~dz_val.values
+                n_dropped = int((~train_keep).sum() + (~val_keep).sum())
+                X_train, y_train = X_train[train_keep], y_train[train_keep]
+                X_val, y_val = X_val[val_keep], y_val[val_keep]
+                self._log(
+                    f"  Dead-zone filter (threshold={self.target_threshold}): "
+                    f"dropped {n_dropped} ambiguous rows from train/val",
+                    'info',
+                )
+
+            self._log(
+                f"  Split: train={len(X_train)}, val={len(X_val)}, "
+                f"test={len(X_test)}",
+                'info',
+            )
+
+            # ── Feature selection: drop low-importance features ───────
+            if self.feature_selection_threshold > 0:
+                X_train, X_val, X_test = self._select_features(
+                    X_train, y_train, X_val, X_test,
+                )
             
             # Initialize XGBoost
             self.model = XGBClassifier(
@@ -332,7 +526,11 @@ class ModelManager:
                 subsample=self.subsample,
                 colsample_bytree=self.colsample_bytree,
                 min_child_weight=self.min_child_weight,
+                gamma=self.gamma,
+                reg_alpha=self.reg_alpha,
+                reg_lambda=self.reg_lambda,
                 random_state=self.random_state,
+                early_stopping_rounds=self.early_stopping_rounds if self.early_stopping_rounds > 0 else None,
                 eval_metric='logloss',
                 verbosity=0,
             )
@@ -343,6 +541,11 @@ class ModelManager:
             self._log(f"  subsample:            {self.subsample}", 'info')
             self._log(f"  colsample_bytree:     {self.colsample_bytree}", 'info')
             self._log(f"  min_child_weight:     {self.min_child_weight}", 'info')
+            self._log(f"  gamma:                {self.gamma}", 'info')
+            self._log(f"  reg_alpha:            {self.reg_alpha}", 'info')
+            self._log(f"  reg_lambda:           {self.reg_lambda}", 'info')
+            self._log(f"  early_stopping:       {self.early_stopping_rounds}", 'info')
+            self._log(f"  feature_selection:    {self.feature_selection_threshold}", 'info')
             self._log(f"  random_state:         {self.random_state}", 'info')
             self._log(
                 f"Fitting XGBoost ("
@@ -350,9 +553,25 @@ class ModelManager:
                 'progress',
             )
             t0 = time.time()
-            self.model.fit(X_train, y_train)
+
+            # ── Early stopping on held-out validation set ─────────
+            if self.early_stopping_rounds > 0:
+                self.model.fit(
+                    X_train, y_train,
+                    eval_set=[(X_val, y_val)],
+                    verbose=False,
+                )
+                best_iter = self.model.best_iteration
+                self._log(
+                    f"✓ Early stopping: best iteration {best_iter} "
+                    f"(of {self.n_estimators} max)",
+                    'success',
+                )
+            else:
+                self.model.fit(X_train, y_train)
+
             fit_secs = time.time() - t0
-            self._log(f"✓ Model fitted in {fit_secs:.1f}s ({self.n_estimators} trees)", 'success')
+            self._log(f"✓ Model fitted in {fit_secs:.1f}s", 'success')
             
             # Predictions
             y_train_pred = self.model.predict(X_train)
@@ -381,6 +600,9 @@ class ModelManager:
                 bar = '█' * int(row.importance * 100)
                 self._log(f"  {rank:2d}. {row.feature:<28s} {row.importance:.4f}  {bar}", 'info')
             self._log("────────────────────────────────────────────", 'info')
+
+            # ── Baseline comparison ───────────────────────────────────
+            self._log_baseline_comparison(y_test, result["test_accuracy"])
             
             # Ensure directory exists before saving
             self._ensure_data_directory()
@@ -513,6 +735,9 @@ class ModelManager:
                     subsample=self.subsample,
                     colsample_bytree=self.colsample_bytree,
                     min_child_weight=self.min_child_weight,
+                    gamma=self.gamma,
+                    reg_alpha=self.reg_alpha,
+                    reg_lambda=self.reg_lambda,
                     random_state=seed,
                     eval_metric='logloss',
                     verbosity=0,

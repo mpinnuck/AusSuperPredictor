@@ -9,14 +9,20 @@
     "model": {
         "save_path": "/Users/markpinnuck/Library/Application Support/AusSuperPredictor/data/model.pkl",
         "features_save_path": "/Users/markpinnuck/Library/Application Support/AusSuperPredictor/data/features.pkl",
-        "n_estimators": 1000,
-        "max_depth": 4,
+        "n_estimators": 500,
+        "max_depth": 3,
         "min_samples_split": 10,
-        "min_child_weight": 5,
-        "learning_rate": 0.01,
-        "subsample": 0.8,
-        "colsample_bytree": 0.7,
-        "random_state": 42
+        "min_child_weight": 10,
+        "learning_rate": 0.05,
+        "subsample": 0.7,
+        "colsample_bytree": 0.6,
+        "gamma": 1.0,
+        "reg_alpha": 0.1,
+        "reg_lambda": 2.0,
+        "random_state": 42,
+        "early_stopping_rounds": 50,
+        "feature_selection_threshold": 0.01,
+        "target_threshold": 0.001
     },
     "schedule": {
         "market_close_time": "16:00"
