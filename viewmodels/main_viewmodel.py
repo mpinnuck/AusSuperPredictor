@@ -471,7 +471,14 @@ class MainViewModel:
             next_day += timedelta(days=1)
         prediction_date_str = next_day.strftime('%Y-%m-%d')
 
-        predicted_up = 1 if prob > 0.5 else 0
+        # Keep the stored direction aligned with the decision threshold.
+        # NEUTRAL means no directional call was made.
+        if decision['decision'] == 'POSITIVE_EXPECTED':
+            predicted_up = 1
+        elif decision['decision'] == 'NEGATIVE_EXPECTED':
+            predicted_up = 0
+        else:
+            predicted_up = -1
 
         # ── Log prediction summary ──────────────────────────────
         self.log_queue.put(f"\n{'='*50}", 'info')

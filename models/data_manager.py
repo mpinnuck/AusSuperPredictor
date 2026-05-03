@@ -977,8 +977,29 @@ class DataManager:
             if col in hist.columns:
                 hist[col] = hist[col].astype(object)
 
+        # Normalize legacy NEUTRAL rows: no directional call should not be
+        # scored as right/wrong.
+        normalized_neutral_rows = 0
+        if 'signal' in hist.columns:
+            neutral_mask = ~hist['signal'].fillna('').astype(str).str.contains(
+                'POSITIVE|NEGATIVE', regex=True
+            )
+            if neutral_mask.any():
+                normalized_neutral_rows = int(neutral_mask.sum())
+                hist.loc[neutral_mask, 'predicted_up'] = -1
+                hist.loc[neutral_mask, 'success'] = np.nan
+                hist.loc[neutral_mask, 'result_label'] = 'NEUTRAL'
+                hist.loc[neutral_mask, 'hypothetical_return'] = 0.0
+
         pending = hist['actual_close'].isna()
         if not pending.any():
+            if normalized_neutral_rows:
+                hist.to_csv(self.HISTORY_PATH, index=False, float_format='%.6f')
+                self._log(
+                    f"✓ Normalized {normalized_neutral_rows} NEUTRAL row(s) "
+                    "to no-direction scoring",
+                    'info',
+                )
             # Even if no new back-fills needed, patch legacy rows
             # that are missing the newer columns
             updated_legacy = self._backfill_legacy_columns(hist)
@@ -1002,9 +1023,13 @@ class DataManager:
                 actual_return = return_lookup[pred_date]
                 predicted_up = hist.at[idx, 'predicted_up']
 
-                # Success = direction matches
+                # Success = direction matches, but only when a directional
+                # call was made (predicted_up in {0, 1}).
                 actual_up = 1 if actual_return > 0 else 0
-                success = 1 if int(predicted_up) == actual_up else 0
+                if int(predicted_up) in (0, 1):
+                    success = 1 if int(predicted_up) == actual_up else 0
+                else:
+                    success = np.nan
 
                 hist.at[idx, 'actual_close'] = actual_close
                 hist.at[idx, 'actual_return'] = actual_return
@@ -1017,8 +1042,10 @@ class DataManager:
                     hist.at[idx, 'result_label'] = 'CORRECT_DOWN'
                 elif int(predicted_up) == 1 and actual_up == 0:
                     hist.at[idx, 'result_label'] = 'WRONG_UP'
-                else:
+                elif int(predicted_up) == 0 and actual_up == 1:
                     hist.at[idx, 'result_label'] = 'WRONG_DOWN'
+                else:
+                    hist.at[idx, 'result_label'] = 'NEUTRAL'
 
                 # Hypothetical return: gain if followed the signal
                 # If predicted UP → you bought → actual_return
@@ -1037,6 +1064,13 @@ class DataManager:
         if updated:
             hist.to_csv(self.HISTORY_PATH, index=False, float_format='%.6f')
             self._log(f"✓ Updated {updated} prediction(s) in history with actual results", 'success')
+        elif normalized_neutral_rows:
+            hist.to_csv(self.HISTORY_PATH, index=False, float_format='%.6f')
+            self._log(
+                f"✓ Normalized {normalized_neutral_rows} NEUTRAL row(s) "
+                "to no-direction scoring",
+                'info',
+            )
 
         # Also patch any legacy rows missing the newer columns
         self._backfill_legacy_columns(hist)
@@ -1073,8 +1107,10 @@ class DataManager:
                     hist.at[idx, 'result_label'] = 'CORRECT_DOWN'
                 elif predicted_up == 1 and actual_up == 0:
                     hist.at[idx, 'result_label'] = 'WRONG_UP'
-                else:
+                elif predicted_up == 0 and actual_up == 1:
                     hist.at[idx, 'result_label'] = 'WRONG_DOWN'
+                else:
+                    hist.at[idx, 'result_label'] = 'NEUTRAL'
 
             # hypothetical_return
             if 'hypothetical_return' not in hist.columns or pd.isna(hist.at[idx, 'hypothetical_return']):
