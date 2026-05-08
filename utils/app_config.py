@@ -49,6 +49,7 @@ class ModelConfig:
     early_stopping_rounds: int = 50
     feature_selection_threshold: float = 0.005
     target_threshold: float = 0.0
+    decision_threshold: float = 0.55
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ModelConfig":
@@ -69,6 +70,7 @@ class ModelConfig:
             early_stopping_rounds=d.get("early_stopping_rounds", cls.early_stopping_rounds),
             feature_selection_threshold=d.get("feature_selection_threshold", cls.feature_selection_threshold),
             target_threshold=d.get("target_threshold", cls.target_threshold),
+            decision_threshold=d.get("decision_threshold", cls.decision_threshold),
         )
 
 

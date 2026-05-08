@@ -452,7 +452,10 @@ class MainViewModel:
             return False
 
         # Get decision with confidence analysis
-        decision = self.model_manager.get_decision(combined, threshold=0.6)
+        decision = self.model_manager.get_decision(
+            combined,
+            threshold=self.config.model.decision_threshold,
+        )
         if decision['probability'] is None:
             self.log_queue.put("Prediction failed.", 'error')
             return False
